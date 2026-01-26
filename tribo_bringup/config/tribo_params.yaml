@@ -1,0 +1,9 @@
+tribo_bringup:
+  ros__parameters:
+    track_width: 0.397
+    # ...bringup 파라미터들
+
+tribo_odom:
+  ros__parameters:
+    track_width: 0.397
+    # ...odom 파라미터들

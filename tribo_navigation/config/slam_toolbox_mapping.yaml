@@ -1,0 +1,39 @@
+slam_toolbox:
+  ros__parameters:
+
+    odom_frame: "odom"
+    map_frame: "map"
+    base_frame: "base_link"   # ★ 여기 절대 건드리지 말기
+    scan_topic: "/scan_filtered"
+
+    mode: "mapping"
+    localization_only: false
+
+    # === 시간/맵 업데이트 쪽 ===
+    transform_publish_period: 0.02
+    publish_period: 0.05
+    map_update_interval: 3.0          # 2.0 → 3.0 정도로 살짝 여유
+
+    resolution: 0.05
+    max_laser_range: 10.0
+    minimum_time_interval: 0.5        # 예제 값 가져오기
+
+    transform_timeout: 0.4            # 예제 값
+    tf_buffer_duration: 30.0          # 예제 값 (5 → 30으로 늘리기)
+
+    # === 키프레임 조건 (너무 자주 만들지 않게) ===
+    minimum_travel_distance: 0.3      # 0.1 → 0.3~0.5 사이 추천
+    minimum_travel_heading: 0.3
+
+    # === 스캔 처리 관련 ===
+    throttle_scans: 2                 # 1 → 2 (C1 10Hz → 5Hz만 사용)
+    scan_buffer_size: 10              # 예제 값
+    scan_buffer_maximum_scan_distance: 8.0
+
+    # slam이 스캔 큐에 오래 쌓아두지 않게 (공식 예제엔 없지만 slam_toolbox에 있는 옵션)
+    scan_queue_size: 1
+
+    use_scan_matching: true
+    use_map_scan_matching: true
+
+    debug_logging: false

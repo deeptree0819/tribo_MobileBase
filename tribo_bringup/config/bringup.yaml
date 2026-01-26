@@ -1,0 +1,49 @@
+# tribo_bringup (hardware + teleop interface)
+tribo_bringup:
+  ros__parameters:
+    # Serial
+    port: "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+    baudrate: 115200
+    car_type: 1
+
+    # Motion interface
+    use_motion_mode: false
+    max_lin_vel: 0.50
+    max_ang_vel: 2.00
+    turn_scale: 1.00
+
+    # Differential approximation
+    # (track_width comes from robot_geom.yaml)
+
+    # cmd_vel safety
+    vx_deadzone: 0.02
+    wz_deadzone: 0.05
+    cmd_timeout: 0.50
+
+    # Per-motor calibration
+    gain_m1: 1.000   # FL
+    gain_m2: 0.977   # RL
+    gain_m3: 0.78  # RR
+    gain_m4: 0.73   # FR
+
+    # Reverse-direction (backward) extra factors
+    gain_left_rev_factor: 1.00
+    gain_right_rev_factor: 1.00
+
+    # Per-motor direction invert (use ONLY if a wheel spins backward for +cmd_vel)
+    invert_m1: false
+    invert_m2: false
+    invert_m3: false
+    invert_m4: false
+
+    # Minimum PWM to overcome static friction (0~100)
+    pwm_min_percent: 35.0
+
+    # Debug / telemetry
+    debug_hw: false
+    debug_tx: false
+    debug_enc_speed: false
+    debug_enc_period: 1.0
+
+    publish_wheel_speed: true
+    publish_wheel_delta: true

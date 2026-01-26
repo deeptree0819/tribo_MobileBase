@@ -1,0 +1,31 @@
+# Tribo LiDAR self-filtering config (laser_filters)
+# - Input  : /scan (from your LiDAR driver)
+# - Output : /scan_filtered (use this for slam_toolbox + nav2)
+#
+# Run example:
+#   ros2 run laser_filters scan_to_scan_filter_chain --ros-args \
+#     --params-file <this_file.yaml> \
+#     -r scan:=/scan \
+#     -r scan_filtered:=/scan_filtered
+#
+# Notes:
+# - BoxFilter removes returns inside a cartesian box expressed in `box_frame` (here: base_link).
+# - Ensure TF exists: base_link <-> <scan frame_id> (e.g., laser_link).
+/**:
+  ros__parameters:
+    # Optional: make internal TF message filter wait for transforms to this frame.
+    # tf_message_filter_target_frame: base_link
+
+    filter1:
+      name: box_self
+      type: laser_filters/LaserScanBoxFilter
+      params:
+        box_frame: base_link
+        # Start with a conservative box that covers the robot's internal structure.
+        # Tune these to JUST cover the pillars / chassis seen by the LiDAR.
+        min_x: -0.30
+        max_x:  0.30
+        min_y: -0.30
+        max_y:  0.30
+        min_z: -0.50
+        max_z:  0.50

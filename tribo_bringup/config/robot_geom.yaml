@@ -1,0 +1,10 @@
+# Robot geometry: edit these FIRST when hardware changes.
+# Units: meters, ticks
+# NOTE: track_width = distance between left/right driven wheel centers (not the cart width).
+# NOTE: wheel_radius = wheel diameter / 2.
+# NOTE: ticks_per_rev = encoder ticks per one wheel revolution (after gearbox if encoder is on motor shaft, adjust accordingly).
+/**:
+  ros__parameters:
+    track_width: 0.40
+    wheel_radius: 0.04
+    ticks_per_rev: 4320

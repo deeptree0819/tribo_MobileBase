@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<launch>
+  <set_env name="RCUTILS_LOGGING_BUFFERED_STREAM" value="1"/>
+
+  <arg name="map" default=""/>
+  <arg name="params_file" default="$(find-pkg-share tribo_navigation)/config/nav2_params.yaml"/>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="autostart" default="true"/>
+  <arg name="use_respawn" default="false"/>
+  <arg name="log_level" default="info"/>
+
+  <arg name="use_scan_filter" default="true"/>
+  <arg name="scan_filter_params_file" default="$(find-pkg-share tribo_navigation)/config/scan_filter.yaml"/>
+  <arg name="scan_in_topic" default="/scan"/>
+  <arg name="scan_out_topic" default="/scan_filtered"/>
+
+  <arg name="set_initial_pose" default="true"/>
+  <arg name="initial_pose_x" default="0.0"/>
+  <arg name="initial_pose_y" default="0.0"/>
+  <arg name="initial_pose_yaw" default="0.0"/>
+  <arg name="initial_pose_frame_id" default="map"/>
+  <arg name="initial_pose_publish_count" default="5"/>
+  <arg name="initial_pose_publish_period" default="0.5"/>
+  <arg name="initial_pose_initial_delay" default="2.0"/>
+  <arg name="initial_pose_wait_for_subscriber" default="true"/>
+
+  <node pkg="laser_filters" exec="scan_to_scan_filter_chain"
+        name="scan_filter" output="screen"
+        if="$(var use_scan_filter)">
+    <param from="$(var scan_filter_params_file)"/>
+    <remap from="scan" to="$(var scan_in_topic)"/>
+    <remap from="scan_filtered" to="$(var scan_out_topic)"/>
+  </node>
+
+  <include file="$(find-pkg-share tribo_navigation)/launch/localization_launch.xml">
+    <arg name="map" value="$(var map)"/>
+    <arg name="params_file" value="$(var params_file)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    <arg name="autostart" value="$(var autostart)"/>
+    <arg name="use_respawn" value="$(var use_respawn)"/>
+    <arg name="log_level" value="$(var log_level)"/>
+  </include>
+
+  <include file="$(find-pkg-share tribo_navigation)/launch/navigation_launch.xml">
+    <arg name="params_file" value="$(var params_file)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    <arg name="autostart" value="$(var autostart)"/>
+    <arg name="use_respawn" value="$(var use_respawn)"/>
+    <arg name="log_level" value="$(var log_level)"/>
+  </include>
+
+  <node pkg="tribo_navigation" exec="initial_pose_publisher"
+        name="initial_pose_publisher" output="screen"
+        if="$(var set_initial_pose)">
+    <param name="x" value="$(var initial_pose_x)"/>
+    <param name="y" value="$(var initial_pose_y)"/>
+    <param name="yaw" value="$(var initial_pose_yaw)"/>
+    <param name="frame_id" value="$(var initial_pose_frame_id)"/>
+    <param name="publish_count" value="$(var initial_pose_publish_count)"/>
+    <param name="publish_period" value="$(var initial_pose_publish_period)"/>
+    <param name="initial_delay" value="$(var initial_pose_initial_delay)"/>
+    <param name="wait_for_subscriber" value="$(var initial_pose_wait_for_subscriber)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

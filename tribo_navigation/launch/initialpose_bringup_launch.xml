@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<launch>
+  <set_env name="RCUTILS_LOGGING_BUFFERED_STREAM" value="1"/>
+
+  <arg name="map" default=""/>
+  <arg name="params_file" default="$(find-pkg-share tribo_navigation)/config/nav2_params.yaml"/>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="autostart" default="true"/>
+  <arg name="use_respawn" default="false"/>
+  <arg name="log_level" default="info"/>
+
+  <arg name="initial_pose_x" default="0.0"/>
+  <arg name="initial_pose_y" default="0.0"/>
+  <arg name="initial_pose_yaw" default="0.0"/>
+  <arg name="initial_pose_frame_id" default="map"/>
+  <arg name="initial_pose_publish_count" default="5"/>
+  <arg name="initial_pose_publish_period" default="0.5"/>
+  <arg name="initial_pose_initial_delay" default="2.0"/>
+  <arg name="initial_pose_wait_for_subscriber" default="true"/>
+
+  <include file="$(find-pkg-share tribo_navigation)/launch/bringup_launch.xml">
+    <arg name="map" value="$(var map)"/>
+    <arg name="params_file" value="$(var params_file)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    <arg name="autostart" value="$(var autostart)"/>
+    <arg name="use_respawn" value="$(var use_respawn)"/>
+    <arg name="log_level" value="$(var log_level)"/>
+    <arg name="set_initial_pose" value="true"/>
+    <arg name="initial_pose_x" value="$(var initial_pose_x)"/>
+    <arg name="initial_pose_y" value="$(var initial_pose_y)"/>
+    <arg name="initial_pose_yaw" value="$(var initial_pose_yaw)"/>
+    <arg name="initial_pose_frame_id" value="$(var initial_pose_frame_id)"/>
+    <arg name="initial_pose_publish_count" value="$(var initial_pose_publish_count)"/>
+    <arg name="initial_pose_publish_period" value="$(var initial_pose_publish_period)"/>
+    <arg name="initial_pose_initial_delay" value="$(var initial_pose_initial_delay)"/>
+    <arg name="initial_pose_wait_for_subscriber" value="$(var initial_pose_wait_for_subscriber)"/>
+  </include>
+</launch>

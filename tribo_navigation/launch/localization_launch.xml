@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<launch>
+  <set_env name="RCUTILS_LOGGING_BUFFERED_STREAM" value="1"/>
+
+  <arg name="map" default=""/>
+  <arg name="params_file" default="$(find-pkg-share tribo_navigation)/config/nav2_params.yaml"/>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="autostart" default="true"/>
+  <arg name="use_respawn" default="false"/>
+  <arg name="log_level" default="info"/>
+
+  <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen"
+        respawn="$(var use_respawn)" respawn_delay="2.0"
+        args="--ros-args --log-level $(var log_level)">
+    <param from="$(var params_file)"/>
+    <param name="yaml_filename" value="$(var map)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/tf" to="tf"/>
+    <remap from="/tf_static" to="tf_static"/>
+  </node>
+
+  <node pkg="nav2_amcl" exec="amcl" name="amcl" output="screen"
+        respawn="$(var use_respawn)" respawn_delay="2.0"
+        args="--ros-args --log-level $(var log_level)">
+    <param from="$(var params_file)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/tf" to="tf"/>
+    <remap from="/tf_static" to="tf_static"/>
+  </node>
+
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager"
+        name="lifecycle_manager_localization" output="screen"
+        args="--ros-args --log-level $(var log_level)">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <param name="autostart" value="$(var autostart)"/>
+    <param name="node_names" value="['map_server', 'amcl']"/>
+  </node>
+</launch>

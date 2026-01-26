@@ -1,0 +1,16 @@
+# tribo_odom (encoder -> /odom + TF)
+tribo_odom:
+  ros__parameters:
+    encoder_topic: "/encoder_raw"
+
+    # (track_width / wheel_radius / ticks_per_rev come from robot_geom.yaml)
+
+    odom_frame: "odom"
+    base_frame: "base_link"
+    publish_tf: true
+
+    # Sign fixes (use ONLY one place)
+    invert_left: false
+    invert_right: false
+    invert_translation: false
+    invert_rotation: false
