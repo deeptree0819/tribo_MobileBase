@@ -260,8 +260,11 @@ ros2 launch tribo_navigation bringup_launch.xml \
 
 - `set_initial_pose:=false`로 띄우면 초기 위치를 자동으로 발행하지 않으므로, 다음 단계에서 RViz "2D Pose Estimate"로 직접 찍어줘야 `map`→`odom` TF가 살아납니다.
 - 처음부터 원점에서 시작한다는 게 확실하면 `set_initial_pose:=true`(기본값) + `initial_pose_x/y/yaw`로 자동 발행도 가능합니다.
+- 위 launch는 **로봇에 연결된 LCD에 RViz2를 전체화면으로 자동 표시**합니다(`use_rviz:=true` 기본). RViz가 필요 없으면 `use_rviz:=false`로 끄세요. LCD 표시는 GNOME 데스크톱 세션의 Xwayland(`:0`)에 X 앱을 띄우는 방식이라, **로봇 LCD에 사용자가 한 번 로그인되어 GNOME 세션이 살아있어야** RViz 창이 화면에 뜹니다(자동 로그인이 꺼져 있다면 부팅 후 LCD에서 한 번 로그인 필요).
 
-**③ PC에서: RViz 띄우기**
+**③ (선택) PC에서도 RViz 따로 보기**
+
+LCD 화면이 작거나 별도 모니터로 보고 싶을 때만. 같은 토픽을 PC의 큰 화면에서 동시에 볼 수 있습니다(로봇 LCD의 RViz와 무관).
 
 ```bash
 # PC

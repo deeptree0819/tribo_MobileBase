@@ -27,7 +27,11 @@ setup(
         (
             os.path.join("share", package_name, "rviz"),
             glob(os.path.join("rviz", "*.rviz")),
-        ),    
+        ),
+        (
+            os.path.join("lib", package_name),
+            glob(os.path.join("scripts", "*.sh")),
+        ),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

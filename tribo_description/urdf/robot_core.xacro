@@ -177,11 +177,11 @@
         </inertial>
     </link>
 
-    <!-- 레이저를 마운트 위에 고정 -->
+    <!-- 레이저를 마운트 위에 고정. 라이다가 거꾸로 마운트되어 있어 yaw=π로 보정 -->
     <joint name="laser_link_fixed_joint" type="fixed">
     <parent link="lidar_mount"/>
     <child link="laser_link"/>
-    <origin xyz="0.0 0.0 0.05" rpy="0 0 0"/>
+    <origin xyz="0.0 0.0 0.05" rpy="0 0 ${pi}"/>
     </joint>
 
 </robot>

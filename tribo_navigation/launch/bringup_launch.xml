@@ -24,6 +24,16 @@
   <arg name="initial_pose_initial_delay" default="2.0"/>
   <arg name="initial_pose_wait_for_subscriber" default="true"/>
 
+  <!-- LCD(로봇에 연결된 화면)에 RViz2를 전체화면으로 자동 표시
+       - GNOME Wayland 세션의 Xwayland(:0)를 통해 X11 앱을 띄움
+       - XAUTHORITY 파일은 mutter가 매 부팅마다 random suffix로 새로 만들기 때문에
+         wrapper 스크립트(launch_rviz_on_lcd.sh)가 런타임에 글롭으로 해석한다 -->
+  <arg name="use_rviz" default="true"/>
+  <arg name="rviz_config" default="$(find-pkg-share tribo_navigation)/rviz/navigation.rviz"/>
+  <arg name="rviz_display" default=":0"/>
+  <arg name="rviz_xauthority_glob" default="/run/user/1000/.mutter-Xwaylandauth.*"/>
+  <arg name="rviz_launcher" default="$(find-pkg-prefix tribo_navigation)/lib/tribo_navigation/launch_rviz_on_lcd.sh"/>
+
   <node pkg="laser_filters" exec="scan_to_scan_filter_chain"
         name="scan_filter" output="screen"
         if="$(var use_scan_filter)">
@@ -62,4 +72,10 @@
     <param name="wait_for_subscriber" value="$(var initial_pose_wait_for_subscriber)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
+
+  <!-- 로봇 LCD에 RViz2 전체화면 자동 표시
+       - SSH 비대화형 세션에서 띄울 때를 대비해 wrapper 스크립트가 DISPLAY/XAUTHORITY 조립 -->
+  <executable cmd="$(var rviz_launcher) $(var rviz_config) $(var rviz_display) $(var rviz_xauthority_glob)"
+              name="rviz2_lcd" output="screen"
+              if="$(var use_rviz)"/>
 </launch>
