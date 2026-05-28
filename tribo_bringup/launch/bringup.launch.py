@@ -7,7 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.substitutions import LaunchConfiguration, Command
+from launch.substitutions import LaunchConfiguration, Command, AndSubstitution, NotSubstitution
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
@@ -27,6 +27,10 @@ def generate_launch_description():
 
     # odom
     use_odom = LaunchConfiguration("use_odom")
+
+    # ekf (sensor fusion: encoder odom + IMU)
+    use_ekf = LaunchConfiguration("use_ekf")
+    ekf_params_file = LaunchConfiguration("ekf_params_file")
 
     # lidar
     use_lidar = LaunchConfiguration("use_lidar")
@@ -78,6 +82,18 @@ def generate_launch_description():
         description="Start tribo_odom odom_publisher (/odom + TF odom->base_link)",
     )
 
+    declare_use_ekf = DeclareLaunchArgument(
+        "use_ekf",
+        default_value="true",
+        description="Fuse odom+IMU via robot_localization EKF. ON: odom_publisher -> /odom_raw "
+                    "(TF off), ekf_node -> /odom + TF. OFF: odom_publisher -> /odom + TF (legacy).",
+    )
+    declare_ekf_params = DeclareLaunchArgument(
+        "ekf_params_file",
+        default_value=os.path.join(pkg_bringup, "param", "ekf.yaml"),
+        description="EKF parameter file (robot_localization)",
+    )
+
     declare_use_lidar = DeclareLaunchArgument(
         "use_lidar",
         default_value="true",
@@ -119,28 +135,58 @@ def generate_launch_description():
         ],
     )
 
-    # Odom node
-    odom_node = Node(
+    # Odom node — 공통 파라미터 (track 보정, sign 등)
+    _odom_common_params = {
+        "encoder_topic": "encoder_raw",
+        "odom_frame": "odom",
+        "base_frame": "base_link",
+        "invert_left": False,
+        "invert_right": False,
+        "invert_translation": False,
+        "invert_rotation": True,
+        # effective (slip-calibrated) track for odom yaw; overrides physical 0.52 in robot_geom.yaml
+        "track_width": 0.735,
+    }
+
+    # EKF 사용 시: odom_publisher → /odom_raw (TF 끔). EKF가 /odom + TF 담당.
+    odom_node_with_ekf = Node(
         package="tribo_odom",
         executable="odom_publisher",
         name="tribo_odom",
         output="screen",
-        condition=IfCondition(use_odom),
+        condition=IfCondition(AndSubstitution(use_odom, use_ekf)),
         parameters=[
             geom_file,
-            {
-                "encoder_topic": "encoder_raw",
-                "publish_tf": True,
-                "odom_frame": "odom",
-                "base_frame": "base_link",
-                "invert_left": False,
-                "invert_right": False,
-                "invert_translation": False,
-                "invert_rotation": True,
-                # effective (slip-calibrated) track for odom yaw; overrides physical 0.52 in robot_geom.yaml
-                "track_width": 0.735,
-            },
+            {**_odom_common_params,
+             "output_topic": "odom_raw",
+             "publish_tf": False},
         ],
+    )
+
+    # EKF 미사용(legacy): odom_publisher → /odom + TF (이전 동작 유지)
+    odom_node_no_ekf = Node(
+        package="tribo_odom",
+        executable="odom_publisher",
+        name="tribo_odom",
+        output="screen",
+        condition=IfCondition(AndSubstitution(use_odom, NotSubstitution(use_ekf))),
+        parameters=[
+            geom_file,
+            {**_odom_common_params,
+             "output_topic": "odom",
+             "publish_tf": True},
+        ],
+    )
+
+    # EKF (robot_localization): /odom_raw + /imu/data → 융합 → /odom + TF(odom->base_link)
+    ekf_node = Node(
+        package="robot_localization",
+        executable="ekf_node",
+        name="ekf_node",
+        output="screen",
+        condition=IfCondition(use_ekf),
+        parameters=[ekf_params_file],
+        remappings=[("odometry/filtered", "odom")],
     )
 
     sllidar_share = get_package_share_directory("sllidar_ros2")
@@ -164,11 +210,15 @@ def generate_launch_description():
             declare_sim_time,
 
             declare_use_odom,
+            declare_use_ekf,
+            declare_ekf_params,
             declare_use_lidar,
             declare_lidar_frame,
 
             bringup_node,
-            odom_node,
+            odom_node_with_ekf,
+            odom_node_no_ekf,
+            ekf_node,
             lidar_launch,
             joint_state_pub,
             robot_state_pub,

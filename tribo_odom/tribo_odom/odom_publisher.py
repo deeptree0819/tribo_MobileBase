@@ -28,6 +28,7 @@ class TriboOdom(Node):
 
         # ----- 파라미터 선언 -----
         self.declare_parameter("encoder_topic", "encoder_raw")  # bringup에서 퍼블리시하는 토픽 이름
+        self.declare_parameter("output_topic", "odom")          # 출력 토픽 (EKF 융합 시 "odom_raw" 권장)
         self.declare_parameter("wheel_radius", 0.04)            # m
         self.declare_parameter("ticks_per_rev", 4320)           # 한 바퀴당 tick 수
         self.declare_parameter("track_width", 0.397)             # m (좌우 바퀴 사이 거리)
@@ -47,6 +48,7 @@ class TriboOdom(Node):
 
         # ----- 파라미터 읽기 -----
         self.encoder_topic = str(self.get_parameter("encoder_topic").value)
+        self.output_topic = str(self.get_parameter("output_topic").value)
 
         self.R = float(self.get_parameter("wheel_radius").value)
         self.tpr = int(self.get_parameter("ticks_per_rev").value)
@@ -68,7 +70,7 @@ class TriboOdom(Node):
             self.cb_enc,
             50
         )
-        self.pub = self.create_publisher(Odometry, "odom", 50)
+        self.pub = self.create_publisher(Odometry, self.output_topic, 50)
         self.tfbr = TransformBroadcaster(self)
 
         # ----- 상태 변수 -----
@@ -80,7 +82,7 @@ class TriboOdom(Node):
         self.prev_stamp = None  # rclpy.time.Time
 
         self.get_logger().info(
-            f"TriboOdom started. encoder_topic={self.encoder_topic}, "
+            f"TriboOdom started. encoder_topic={self.encoder_topic}, output_topic={self.output_topic}, "
             f"R={self.R:.3f} m, tpr={self.tpr}, track={self.track:.3f} m, "
             f"invert_left={self.inv_left < 0}, invert_right={self.inv_right < 0}, "
             f"publish_tf={self.publish_tf}, yaw_offset={self.yaw_offset:.3f} rad"

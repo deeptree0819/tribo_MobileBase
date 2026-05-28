@@ -26,7 +26,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Int32MultiArray, Float32MultiArray
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, BatteryState
 
 from .tribolib import TriboBase
 
@@ -87,6 +87,14 @@ class TriboBringupTribolib(Node):
         self.declare_parameter("imu_rate", 50.0)          # Hz (ekf frequency와 맞춤)
         self.declare_parameter("invert_imu_yaw", False)   # yaw/gz 부호가 odom과 반대일 때 True
 
+        # ---- Battery (board voltage -> sensor_msgs/BatteryState) ----
+        self.declare_parameter("publish_battery", True)
+        self.declare_parameter("battery_topic", "battery")
+        self.declare_parameter("battery_rate", 1.0)        # Hz (전압은 천천히 변함)
+        self.declare_parameter("battery_full_v", 12.6)     # 3S 만충
+        self.declare_parameter("battery_empty_v", 9.0)     # 3S 방전(0%)
+        self.declare_parameter("battery_warn_v", 10.5)     # 저전압 경고 임계
+
         # ---- Read params ----
         self.port = str(self.get_parameter("port").value)
         self.baud = int(self.get_parameter("baudrate").value)
@@ -136,6 +144,14 @@ class TriboBringupTribolib(Node):
         self.imu_rate = float(self.get_parameter("imu_rate").value)
         self.invert_imu_yaw = bool(self.get_parameter("invert_imu_yaw").value)
 
+        self.publish_battery = bool(self.get_parameter("publish_battery").value)
+        self.battery_topic = str(self.get_parameter("battery_topic").value)
+        self.battery_rate = float(self.get_parameter("battery_rate").value)
+        self.battery_full_v = float(self.get_parameter("battery_full_v").value)
+        self.battery_empty_v = float(self.get_parameter("battery_empty_v").value)
+        self.battery_warn_v = float(self.get_parameter("battery_warn_v").value)
+        self._last_batt_warn_t = 0.0
+
         # ---- Hardware bringup (TriboBase) ----
         self.base = TriboBase(
             port=self.port,
@@ -166,6 +182,10 @@ class TriboBringupTribolib(Node):
         if self.publish_imu:
             self.pub_imu = self.create_publisher(Imu, self.imu_topic, 50)
 
+        self.pub_battery = None
+        if self.publish_battery:
+            self.pub_battery = self.create_publisher(BatteryState, self.battery_topic, 10)
+
         # ---- State ----
         self.last_cmd_time = self.get_clock().now()
         self._last_enc = None  # (t, e1, e2, e3, e4)
@@ -180,6 +200,9 @@ class TriboBringupTribolib(Node):
         # IMU publishing (보드 자동보고 캐시에서 읽어 /imu/data 퍼블리시)
         if self.pub_imu is not None:
             self.create_timer(1.0 / max(self.imu_rate, 1.0), self._imu_timer_cb)
+        # Battery publishing (보드 전압 캐시 → /battery)
+        if self.pub_battery is not None:
+            self.create_timer(1.0 / max(self.battery_rate, 0.1), self._battery_timer_cb)
 
         # 시작 시 정지
         self._send_stop()
@@ -190,7 +213,8 @@ class TriboBringupTribolib(Node):
             f"gain=({self.gain['m1']:.2f},{self.gain['m2']:.2f},"
             f"{self.gain['m3']:.2f},{self.gain['m4']:.2f}), "
             f"pwm_min_percent={self.pwm_min_percent:.1f}, "
-            f"publish_imu={self.publish_imu} (topic={self.imu_topic}, frame={self.imu_frame})"
+            f"publish_imu={self.publish_imu} (topic={self.imu_topic}, frame={self.imu_frame}), "
+            f"publish_battery={self.publish_battery} (topic={self.battery_topic})"
         )
 
     # ---------- helpers ----------
@@ -375,6 +399,46 @@ class TriboBringupTribolib(Node):
         ]
 
         self.pub_imu.publish(msg)
+
+    # ---------- Battery publishing ----------
+    def _battery_timer_cb(self):
+        """
+        보드 배터리 전압을 sensor_msgs/BatteryState 로 퍼블리시.
+        저전압이면 주기적으로 경고 로그.
+        """
+        if self.pub_battery is None:
+            return
+
+        v = float(self.base.get_battery_voltage())
+
+        # 0~1 충전율 (full/empty 파라미터 기준)
+        if self.battery_full_v > self.battery_empty_v:
+            pct = (v - self.battery_empty_v) / (self.battery_full_v - self.battery_empty_v)
+            pct = self._clamp(pct, 0.0, 1.0)
+        else:
+            pct = float("nan")
+
+        msg = BatteryState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.voltage = v
+        msg.percentage = float(pct)
+        msg.present = v > 1.0
+        msg.power_supply_technology = BatteryState.POWER_SUPPLY_TECHNOLOGY_LIPO
+        msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
+        # 보드가 안 주는 값은 NaN
+        msg.current = float("nan")
+        msg.charge = float("nan")
+        msg.capacity = float("nan")
+        msg.design_capacity = float("nan")
+        self.pub_battery.publish(msg)
+
+        # 저전압 경고 (30초마다 1회)
+        now_t = time.time()
+        if 1.0 < v <= self.battery_warn_v and (now_t - self._last_batt_warn_t) > 30.0:
+            self._last_batt_warn_t = now_t
+            self.get_logger().warn(
+                f"LOW BATTERY: {v:.2f} V (<= {self.battery_warn_v:.1f} V), {pct * 100:.0f}%"
+            )
 
     # ---------- encoder polling ----------
     def _enc_timer_cb(self):

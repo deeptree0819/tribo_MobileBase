@@ -54,3 +54,11 @@ tribo_bringup:
     imu_frame: "base_link"
     imu_rate: 50.0
     invert_imu_yaw: false   # set true if IMU yaw spins opposite to encoder odom
+
+    # Battery (board voltage -> sensor_msgs/BatteryState on /battery)
+    publish_battery: true
+    battery_topic: "battery"
+    battery_rate: 1.0
+    battery_full_v: 12.6    # 3S full
+    battery_empty_v: 9.0    # 3S empty (0%)
+    battery_warn_v: 10.5    # low-battery warning threshold
