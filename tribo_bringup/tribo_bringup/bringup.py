@@ -19,12 +19,14 @@ Motor mapping (Rosmaster 기준)
   m1=FL, m2=RL, m3=RR, m4=FR
 """
 
+import math
 import time
 
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Int32MultiArray, Float32MultiArray
+from sensor_msgs.msg import Imu
 
 from .tribolib import TriboBase
 
@@ -78,6 +80,13 @@ class TriboBringupTribolib(Node):
         self.declare_parameter("debug_enc_speed", True)
         self.declare_parameter("debug_enc_period", 0.5)
 
+        # ---- IMU publish (보드 9축 IMU → sensor_msgs/Imu) ----
+        self.declare_parameter("publish_imu", True)
+        self.declare_parameter("imu_topic", "imu/data")   # 보드가 자세 융합 제공 → orientation 포함
+        self.declare_parameter("imu_frame", "base_link")  # TF에 존재하는 프레임 (별도 imu_link 추가 시 변경)
+        self.declare_parameter("imu_rate", 50.0)          # Hz (ekf frequency와 맞춤)
+        self.declare_parameter("invert_imu_yaw", False)   # yaw/gz 부호가 odom과 반대일 때 True
+
         # ---- Read params ----
         self.port = str(self.get_parameter("port").value)
         self.baud = int(self.get_parameter("baudrate").value)
@@ -121,6 +130,12 @@ class TriboBringupTribolib(Node):
         self.debug_enc_speed = bool(self.get_parameter("debug_enc_speed").value)
         self.debug_enc_period = float(self.get_parameter("debug_enc_period").value)
 
+        self.publish_imu = bool(self.get_parameter("publish_imu").value)
+        self.imu_topic = str(self.get_parameter("imu_topic").value)
+        self.imu_frame = str(self.get_parameter("imu_frame").value)
+        self.imu_rate = float(self.get_parameter("imu_rate").value)
+        self.invert_imu_yaw = bool(self.get_parameter("invert_imu_yaw").value)
+
         # ---- Hardware bringup (TriboBase) ----
         self.base = TriboBase(
             port=self.port,
@@ -147,6 +162,10 @@ class TriboBringupTribolib(Node):
         if self.publish_wheel_delta:
             self.pub_delta = self.create_publisher(Int32MultiArray, "wheel_delta_ticks", 50)
 
+        self.pub_imu = None
+        if self.publish_imu:
+            self.pub_imu = self.create_publisher(Imu, self.imu_topic, 50)
+
         # ---- State ----
         self.last_cmd_time = self.get_clock().now()
         self._last_enc = None  # (t, e1, e2, e3, e4)
@@ -158,6 +177,9 @@ class TriboBringupTribolib(Node):
         self.create_timer(0.05, self._watchdog)
         # encoder polling (TriboBase 내부 상태를 읽어서 퍼블리시)
         self.create_timer(0.05, self._enc_timer_cb)
+        # IMU publishing (보드 자동보고 캐시에서 읽어 /imu/data 퍼블리시)
+        if self.pub_imu is not None:
+            self.create_timer(1.0 / max(self.imu_rate, 1.0), self._imu_timer_cb)
 
         # 시작 시 정지
         self._send_stop()
@@ -167,13 +189,26 @@ class TriboBringupTribolib(Node):
             f"car_type={self.car_type}, use_motion_mode={self.use_motion_mode}, "
             f"gain=({self.gain['m1']:.2f},{self.gain['m2']:.2f},"
             f"{self.gain['m3']:.2f},{self.gain['m4']:.2f}), "
-            f"pwm_min_percent={self.pwm_min_percent:.1f}"
+            f"pwm_min_percent={self.pwm_min_percent:.1f}, "
+            f"publish_imu={self.publish_imu} (topic={self.imu_topic}, frame={self.imu_frame})"
         )
 
     # ---------- helpers ----------
     @staticmethod
     def _clamp(x, lo, hi):
         return max(lo, min(hi, x))
+
+    @staticmethod
+    def _euler_to_quat(roll: float, pitch: float, yaw: float):
+        """roll/pitch/yaw [rad] → quaternion (x, y, z, w)."""
+        cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+        cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+        cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+        qx = sr * cp * cy - cr * sp * sy
+        qy = cr * sp * cy + sr * cp * sy
+        qz = cr * cp * sy - sr * sp * cy
+        qw = cr * cp * cy + sr * sp * sy
+        return qx, qy, qz, qw
 
     def _to_pwm_percent(self, x_norm: float) -> int:
         """
@@ -285,6 +320,61 @@ class TriboBringupTribolib(Node):
         dt = (now - self.last_cmd_time).nanoseconds * 1e-9
         if dt > self.cmd_timeout:
             self._send_stop()
+
+    # ---------- IMU publishing ----------
+    def _imu_timer_cb(self):
+        """
+        TriboBase 캐시(보드 자동보고)에서 자세/각속도/가속도를 읽어
+        sensor_msgs/Imu 로 퍼블리시. ekf.yaml의 imu0(/imu/data)에 사용.
+        """
+        if self.pub_imu is None:
+            return
+
+        ax, ay, az = self.base.get_accel()           # m/s^2
+        gx, gy, gz = self.base.get_gyro()             # rad/s
+        roll, pitch, yaw = self.base.get_attitude(in_degrees=False)
+
+        if self.invert_imu_yaw:
+            yaw = -yaw
+            gz = -gz
+
+        qx, qy, qz, qw = self._euler_to_quat(roll, pitch, yaw)
+
+        msg = Imu()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.imu_frame
+
+        msg.orientation.x = float(qx)
+        msg.orientation.y = float(qy)
+        msg.orientation.z = float(qz)
+        msg.orientation.w = float(qw)
+
+        msg.angular_velocity.x = float(gx)
+        msg.angular_velocity.y = float(gy)
+        msg.angular_velocity.z = float(gz)
+
+        msg.linear_acceleration.x = float(ax)
+        msg.linear_acceleration.y = float(ay)
+        msg.linear_acceleration.z = float(az)
+
+        # 대각 공분산: 2D 융합에서는 yaw / yaw-rate 만 신뢰 (roll/pitch는 큰 값)
+        msg.orientation_covariance = [
+            1e6, 0.0, 0.0,
+            0.0, 1e6, 0.0,
+            0.0, 0.0, 0.05,
+        ]
+        msg.angular_velocity_covariance = [
+            1e6, 0.0, 0.0,
+            0.0, 1e6, 0.0,
+            0.0, 0.0, 0.01,
+        ]
+        msg.linear_acceleration_covariance = [
+            0.1, 0.0, 0.0,
+            0.0, 0.1, 0.0,
+            0.0, 0.0, 0.1,
+        ]
+
+        self.pub_imu.publish(msg)
 
     # ---------- encoder polling ----------
     def _enc_timer_cb(self):

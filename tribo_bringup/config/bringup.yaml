@@ -47,3 +47,10 @@ tribo_bringup:
 
     publish_wheel_speed: true
     publish_wheel_delta: true
+
+    # IMU (board 9-axis -> sensor_msgs/Imu on /imu/data)
+    publish_imu: true
+    imu_topic: "imu/data"
+    imu_frame: "base_link"
+    imu_rate: 50.0
+    invert_imu_yaw: false   # set true if IMU yaw spins opposite to encoder odom
