@@ -137,6 +137,8 @@ def generate_launch_description():
                 "invert_right": False,
                 "invert_translation": False,
                 "invert_rotation": True,
+                # effective (slip-calibrated) track for odom yaw; overrides physical 0.52 in robot_geom.yaml
+                "track_width": 0.735,
             },
         ],
     )

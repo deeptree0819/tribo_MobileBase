@@ -1,10 +1,12 @@
 # Robot geometry: edit these FIRST when hardware changes.
 # Units: meters, ticks
-# NOTE: track_width = distance between left/right driven wheel centers (not the cart width).
-# NOTE: wheel_radius = wheel diameter / 2.
+# NOTE: track_width = PHYSICAL distance between left/right driven wheel centers (measured 0.52 m).
+#       Used by tribo_bringup forward kinematics (cmd_vel -> wheel speeds).
+#       tribo_odom uses a LARGER *effective* track (slip-calibrated) set in odom.yaml / launch.
+# NOTE: wheel_radius = wheel diameter / 2. (verified by 1 m straight-drive calibration)
 # NOTE: ticks_per_rev = encoder ticks per one wheel revolution (after gearbox if encoder is on motor shaft, adjust accordingly).
 /**:
   ros__parameters:
-    track_width: 0.40
+    track_width: 0.52
     wheel_radius: 0.04
     ticks_per_rev: 4320

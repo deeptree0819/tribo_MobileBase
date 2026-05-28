@@ -3,14 +3,18 @@ tribo_odom:
   ros__parameters:
     encoder_topic: "/encoder_raw"
 
-    # (track_width / wheel_radius / ticks_per_rev come from robot_geom.yaml)
+    # wheel_radius / ticks_per_rev come from robot_geom.yaml (verified by straight-drive calib).
+    # track_width here OVERRIDES the physical 0.52 from robot_geom.yaml:
+    #   in-place rotation slips, so odom needs a larger *effective* track to get correct yaw.
+    #   calibrated value (odom yaw matched IMU/measured ~55 deg): 0.735 m
+    track_width: 0.735
 
     odom_frame: "odom"
     base_frame: "base_link"
     publish_tf: true
 
-    # Sign fixes (use ONLY one place)
+    # Sign fixes (use ONLY one place). invert_rotation=true verified by CCW rotation test.
     invert_left: false
     invert_right: false
     invert_translation: false
-    invert_rotation: false
+    invert_rotation: true
