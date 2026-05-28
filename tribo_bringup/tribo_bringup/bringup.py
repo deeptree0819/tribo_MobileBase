@@ -7,10 +7,10 @@ tribo_bringup_tribolib
 TriboBase (tribolib)를 사용해서 Rosmaster 보드를 제어하는 bringup 노드.
 
 - 하위: tribolib.TriboBase (바이너리 시리얼 프로토콜)
-- 상위: /cmd_vel 구독 + 엔코더/휴속도 퍼브리시
+- 상위: /cmd_vel 구독 + 엔코더/휠속도 퍼브리시
 
 주요 기능
-1) cmd_vel → 좋/우 속도로 변환 → per-motor gain / invert 적용
+1) cmd_vel → 좌/우 속도로 변환 → per-motor gain / invert 적용
 2) PWM 모드: TriboBase.set_wheel_pwm(-100~100) 사용
 3) auto_report를 통해 들어오는 엔코더 값을 주기적으로 읽어 퍼블리시
 4) cmd_timeout 초 동안 명령이 없으면 자동 정지
@@ -154,9 +154,9 @@ class TriboBringupTribolib(Node):
         self._start_time = time.time()
 
         # ---- Timers ----
-        # cmd timeout watchdog
-        # self.create_timer(0.05, self._watchdog)
-        # encoder polling (TreeboBase 내부 상태를 읽어서 퍼블리시)
+        # cmd timeout watchdog: cmd_vel이 cmd_timeout초 동안 없으면 자동 정지
+        self.create_timer(0.05, self._watchdog)
+        # encoder polling (TriboBase 내부 상태를 읽어서 퍼블리시)
         self.create_timer(0.05, self._enc_timer_cb)
 
         # 시작 시 정지
@@ -209,7 +209,7 @@ class TriboBringupTribolib(Node):
 
     def _send_motion(self, vx: float, wz: float):
         """
-        TreeboBase.set_motion 사용 (보드의 속도 제어/기구학 활용).
+        TriboBase.set_motion 사용 (보드의 속도 제어/기구학 활용).
         """
         if self.debug_tx:
             self.get_logger().info(f"TX MOTION vx={vx:.3f} wz={wz:.3f}")
@@ -289,7 +289,7 @@ class TriboBringupTribolib(Node):
     # ---------- encoder polling ----------
     def _enc_timer_cb(self):
         """
-        TreeboBase 내부 상태에서 엔코더 누적값을 읽어
+        TriboBase 내부 상태에서 엔코더 누적값을 읽어
         encoder_raw / wheel_delta_ticks / wheel_ticks_per_sec 퍼블리시.
         """
         e1, e2, e3, e4 = self.base.get_encoders()
