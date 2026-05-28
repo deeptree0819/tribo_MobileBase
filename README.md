@@ -189,17 +189,108 @@ ros2 topic pub --once /cmd_vel geometry_msgs/Twist "{linear: {x: 0.1}}"
 
 > bringup에는 **watchdog**이 있어 `cmd_vel`이 `cmd_timeout`(기본 0.5초)초 동안 끊기면 모터를 자동 정지합니다.
 
-### 6-3. SLAM 매핑 / 내비게이션
+### 6-3. 맵 만들기 (SLAM)
+
+SLAM Toolbox로 지도를 작성합니다. (`ros-jazzy-slam-toolbox` 패키지 필요 — 3-2의 의존성 목록에 포함)
+
+**① 로봇에서: bringup 실행** (모터·오도메트리·라이다·URDF 전체)
 
 ```bash
-# 지도 작성 (SLAM Toolbox)
-ros2 launch tribo_navigation map_building.launch.py
-
-# 내비게이션 (Nav2)
-ros2 launch tribo_navigation navigation_launch.xml
+# 로봇 (dtrp@192.168.210.14)
+ros2 launch tribo_bringup bringup.launch.py
 ```
 
-### 6-4. 시뮬레이션 (Gazebo)
+**② SLAM 실행** (로봇 또는 PC, 어느 쪽이든 OK — 같은 `ROS_DOMAIN_ID`만 맞으면 됨)
+
+```bash
+ros2 launch tribo_navigation map_building.launch.py
+```
+
+이 런치는 내부적으로 다음을 띄웁니다:
+- `laser_filters/scan_to_scan_filter_chain` (`/scan` → `/scan_filtered`)
+- `slam_toolbox` online sync (`config/slam_toolbox_mapping.yaml`)
+
+**③ 텔레옵으로 주행하며 매핑**
+
+```bash
+# 별도 터미널에서 (PC 권장)
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+> 너무 빠르거나 급회전하면 스캔 매칭이 깨집니다. 천천히, 겹치는 구간을 만들면서 한 바퀴 돌리세요.
+
+**④ 맵 저장**
+
+`map_saver_cli`는 **실행한 머신의 현재 경로**에 `<이름>.yaml` + `<이름>.pgm` 두 파일을 저장합니다. Nav2가 결국 **로봇에서** map을 로드하므로, 가능하면 **로봇에서 저장**하는 게 가장 간단합니다.
+
+```bash
+# 로봇에서 저장 → /home/dtrp/my_map.{yaml,pgm} 생성됨
+ros2 run nav2_map_server map_saver_cli -f ~/my_map
+```
+
+PC에서 저장한 경우, 로봇으로 복사해야 합니다:
+
+```bash
+# PC에서 저장했다면
+ros2 run nav2_map_server map_saver_cli -f ~/my_map
+scp ~/my_map.yaml ~/my_map.pgm dtrp@192.168.210.14:/home/dtrp/
+```
+
+> **최종 상태**: 로봇 측에 `/home/dtrp/my_map.yaml` + `/home/dtrp/my_map.pgm` 두 파일이 있어야 다음 단계(Navigation)가 동작합니다.
+
+### 6-4. Navigation 실행 (Nav2)
+
+저장한 맵 위에서 AMCL 자기위치추정 + Nav2 플래너/컨트롤러로 자율 주행합니다.
+
+**① 로봇에서: bringup 실행**
+
+```bash
+# 로봇
+ros2 launch tribo_bringup bringup.launch.py
+```
+
+**② 로봇에서: Nav2 전체 스택 실행** (localization + navigation 합본)
+
+```bash
+# 로봇 — map 경로는 "로봇 입장의 절대경로"여야 함
+ros2 launch tribo_navigation bringup_launch.xml \
+  map:=/home/dtrp/my_map.yaml \
+  set_initial_pose:=false
+```
+
+- `set_initial_pose:=false`로 띄우면 초기 위치를 자동으로 발행하지 않으므로, 다음 단계에서 RViz "2D Pose Estimate"로 직접 찍어줘야 `map`→`odom` TF가 살아납니다.
+- 처음부터 원점에서 시작한다는 게 확실하면 `set_initial_pose:=true`(기본값) + `initial_pose_x/y/yaw`로 자동 발행도 가능합니다.
+
+**③ PC에서: RViz 띄우기**
+
+```bash
+# PC
+ros2 launch tribo_navigation nav2_view.launch.xml
+```
+
+**④ RViz 조작**
+1. 상단 툴바 **"2D Pose Estimate"** 클릭 → 맵 상의 실제 로봇 위치/방향을 클릭+드래그로 지정 (한 번만 하면 됨)
+2. 상단 툴바 **"Nav2 Goal"** 클릭 → 목표 위치 클릭+드래그 → 자동 주행 시작
+
+**⑤ 동작 검증**
+
+```bash
+# 로봇에서 (또는 PC에서, 도메인만 같으면 됨)
+ros2 lifecycle get /map_server     # → active [3]
+ros2 lifecycle get /amcl           # → active [3]
+ros2 run tf2_ros tf2_echo map odom # → 주기적으로 transform 출력되면 OK
+ros2 topic echo /amcl_pose --once  # 현재 추정 위치
+```
+
+> **⚠️ 함정 — Nav2 단독 런치만 띄우면 안 됨**
+>
+> `tribo_navigation/launch/navigation_launch.xml`은 컨트롤러/플래너/BT/스무더 등 **주행 관련 노드만** 띄우는 부분 런치입니다. 단독 실행하면 `map_server`·`amcl`이 안 떠서 `map` 프레임이 생기지 않고, `tf2_echo map odom`이 영원히 대기합니다. **반드시 `bringup_launch.xml`(= localization + navigation 합본)을 사용하세요.**
+>
+> **⚠️ 함정 — `map:=` 경로는 launch가 실행되는 머신 기준**
+>
+> 위 예시는 로봇에서 `ros2 launch`를 실행하므로 `map:=/home/dtrp/my_map.yaml`(로봇 홈) 입니다. 만약 PC에서 launch를 실행한다면 PC 입장 경로(`/home/deeptree/...`)로 줘야 합니다. PC의 `/home/deeptree/...`를 로봇 launch에 넘기면 `map_server` configure가 "파일을 못 찾는다"며 실패합니다.
+
+### 6-5. 시뮬레이션 (Gazebo)
 
 ```bash
 ros2 launch tribo_gazebo launch_sim.launch.xml
