@@ -28,13 +28,15 @@ ekf_node:
     odom0_differential: false
     odom0_relative: false
 
-    # ----- 보드 IMU (자세 융합값 + 자이로) -----
+    # ----- 보드 IMU (자이로만 사용) -----
+    # 주의: 보드 펌웨어가 REPORT_IMU_ATT의 yaw payload를 갱신하지 않음 (freeze) → orientation.yaw 사용 금지.
+    # gz는 정상 변동하므로 vyaw로만 yaw 추정. roll/pitch는 평면 로봇이라 two_d_mode가 어차피 무시.
     imu0: /imu/data
     imu0_config: [false, false, false,     # 위치 미사용
-                  true,  true,  true,      # roll/pitch/yaw orientation 사용
+                  false, false, false,     # orientation 미사용 (yaw freeze, roll/pitch는 평면이라 불필요)
                   false, false, false,     # 선속도 미사용
-                  true,  true,  true,      # vroll/vpitch/vyaw 사용
-                  false, false, false]     # 가속도 미사용 (bringup에서 큰 공분산으로 무력화)
+                  false, false, true,      # vyaw(gz)만 사용
+                  false, false, false]     # 가속도 미사용
     imu0_queue_size: 20
     imu0_remove_gravitational_acceleration: true
     imu0_differential: false

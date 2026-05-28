@@ -356,10 +356,14 @@ class TriboBringupTribolib(Node):
 
         ax, ay, az = self.base.get_accel()           # m/s^2
         gx, gy, gz = self.base.get_gyro()             # rad/s
-        roll, pitch, yaw = self.base.get_attitude(in_degrees=False)
+        roll, pitch, _yaw_raw = self.base.get_attitude(in_degrees=False)
+
+        # 주의(2025-05): 보드 펌웨어가 REPORT_IMU_ATT의 yaw를 갱신하지 않음 (raw bytes freeze 확인).
+        # gz/roll/pitch는 정상. 따라서 orientation의 yaw는 사용하지 않고 EKF는 vyaw(=gz)로만 yaw 추정.
+        # orientation은 roll/pitch만 유효하다고 보고 yaw는 0으로 채움. 공분산을 1e6으로 키워 무력화.
+        yaw = 0.0
 
         if self.invert_imu_yaw:
-            yaw = -yaw
             gz = -gz
 
         qx, qy, qz, qw = self._euler_to_quat(roll, pitch, yaw)
@@ -381,11 +385,14 @@ class TriboBringupTribolib(Node):
         msg.linear_acceleration.y = float(ay)
         msg.linear_acceleration.z = float(az)
 
-        # 대각 공분산: 2D 융합에서는 yaw / yaw-rate 만 신뢰 (roll/pitch는 큰 값)
+        # 대각 공분산:
+        #   - orientation roll/pitch/yaw 모두 EKF가 무시하도록 1e6 (yaw는 보드가 freeze, roll/pitch는 평면 로봇 two_d_mode가 어차피 무시)
+        #   - angular_velocity z(=gz)만 신뢰 → EKF가 vyaw로 yaw 추정
+        #   - linear_acceleration은 EKF에서 미사용
         msg.orientation_covariance = [
             1e6, 0.0, 0.0,
             0.0, 1e6, 0.0,
-            0.0, 0.0, 0.05,
+            0.0, 0.0, 1e6,
         ]
         msg.angular_velocity_covariance = [
             1e6, 0.0, 0.0,
