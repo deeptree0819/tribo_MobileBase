@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <!-- RGBD(depth) 카메라. 토픽 prefix camera -->
+    <!--   발행 토픽 - camera/image, camera/depth_image, camera/points, camera/camera_info -->
+    <gazebo reference="camera_link">
+        <sensor name="depth_camera" type="rgbd_camera">
+            <always_on>true</always_on>
+            <update_rate>15</update_rate>
+            <visualize>true</visualize>
+            <topic>camera</topic>
+            <gz_frame_id>camera_link_optical</gz_frame_id>
+            <camera>
+                <horizontal_fov>1.204</horizontal_fov>  <!-- ~69° (RealSense D435 근사) -->
+                <image>
+                    <width>640</width>
+                    <height>480</height>
+                    <format>R8G8B8</format>
+                </image>
+                <clip>
+                    <near>0.1</near>
+                    <far>10.0</far>
+                </clip>
+                <depth_camera>
+                    <clip>
+                        <near>0.1</near>
+                        <far>10.0</far>
+                    </clip>
+                </depth_camera>
+                <noise>
+                    <type>gaussian</type>
+                    <mean>0.0</mean>
+                    <stddev>0.007</stddev>
+                </noise>
+            </camera>
+        </sensor>
+    </gazebo>
+</robot>

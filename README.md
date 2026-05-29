@@ -293,10 +293,69 @@ ros2 topic echo /amcl_pose --once  # 현재 추정 위치
 >
 > 위 예시는 로봇에서 `ros2 launch`를 실행하므로 `map:=/home/dtrp/my_map.yaml`(로봇 홈) 입니다. 만약 PC에서 launch를 실행한다면 PC 입장 경로(`/home/deeptree/...`)로 줘야 합니다. PC의 `/home/deeptree/...`를 로봇 launch에 넘기면 `map_server` configure가 "파일을 못 찾는다"며 실패합니다.
 
-### 6-5. 시뮬레이션 (Gazebo)
+### 6-5. 시뮬레이션 (Gazebo) — SLAM/Nav 실습
+
+실로봇 없이 PC에서 SLAM·Nav2를 실습할 수 있도록 Gazebo(gz-sim) 환경을 제공합니다.
+
+**구성**
+- **로봇 모델**: 2단 트롤리 외형(하단 구동 베이스 + 모터 4 + 상단 프로파일 프레임 + 선반 플레이트 + LCD). 4륜 차동구동(skid-steer).
+- **센서**: 2D 라이다(`/scan`), IMU(`/imu`), Depth 카메라(`/camera/image`, `/camera/depth_image`, `/camera/points`, `/camera/camera_info`)
+- **월드** (`tribo_gazebo/worlds/tribo_world.world`): 8×6 m 실내 — 방 3개 + 복도 + 문 3개 + 장애물 5개(루프 클로저·장애물 회피 연습용). 외부 모델 의존성 없는 self-contained.
+- **odom 보정 완료**: 4륜 스키드 회전 슬립 때문에 `gazebo_control.xacro`의 `wheel_separation`을 물리 트랙(0.50)이 아닌 **유효 트랙 0.65**로 설정. IMU·ground-truth와 비교해 회전·직진 모두 ±2% 일치 검증함.
+
+**① 시뮬 실행**
 
 ```bash
 ros2 launch tribo_gazebo launch_sim.launch.xml
+```
+→ 실내 맵 + 로봇(복도 서쪽 `-3, 0`)이 스폰됩니다. (빈 월드는 `launch_sim_empty.launch.xml`)
+
+**② SLAM 맵 작성** (새 터미널)
+
+```bash
+ros2 launch tribo_navigation map_building.launch.py use_sim_time:=true use_scan_filter:=false
+```
+
+**③ 로봇 운전하며 맵 작성** (새 터미널) — 복도·방을 돌며 루프 닫기
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+**④ 맵 저장**
+
+```bash
+ros2 run nav2_map_server map_saver_cli -f ~/tribo_map
+```
+
+**⑤ Nav2 자율주행** (SLAM 종료 후)
+
+```bash
+ros2 launch tribo_navigation bringup_launch.xml \
+  map:=$HOME/tribo_map.yaml use_sim_time:=true use_rviz:=false use_scan_filter:=false
+
+# 다른 터미널 — RViz (Nav2 Goal 로 목표 지정)
+ros2 launch tribo_navigation nav2_view.launch.xml
+```
+
+> **시뮬 주의점**
+> - 시뮬에서는 **항상 `use_sim_time:=true`** (안 주면 TF 시간 불일치로 SLAM/Nav 깨짐).
+> - `laser_filters` 미설치 시 **`use_scan_filter:=false`**. 실로봇과 동일하게 필터까지 쓰려면 `sudo apt install ros-jazzy-laser-filters` 후 옵션 생략.
+> - SLAM과 Nav2는 **동시에 띄우지 말 것** (맵 작성 → 저장 → 종료 → Nav2 순서).
+
+> **⚠️ URDF/xacro 편집 함정 — 주석에 "콜론+공백" 금지**
+>
+> `tribo_description/urdf/*.xacro` 주석에 `단위: m` 같은 **콜론+공백(`: `)** 패턴을 넣으면, robot_description이 YAML로 파싱되며 `yaml.safe_load() failed`로 robot_state_publisher가 죽습니다. `단위 m`, `보정식 - ...` 처럼 콜론을 빼세요.
+
+#### 시뮬 회전 odom 재보정 (필요 시)
+
+스키드 스티어 회전 슬립이 바뀌면 `gazebo_control.xacro`의 `wheel_separation`을 다시 맞춥니다. 제자리 회전 명령을 주고 odom(바퀴)과 IMU(실제) 각속도를 비교:
+
+```bash
+ros2 topic pub -r 20 /cmd_vel geometry_msgs/msg/Twist "{angular: {z: 0.6}}"
+ros2 topic echo /odom --field twist.twist.angular.z   # RViz 가 쓰는 값
+ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
+# 새 값 = 현재값 * (odom 각속도 / imu 각속도)
 ```
 
 ---

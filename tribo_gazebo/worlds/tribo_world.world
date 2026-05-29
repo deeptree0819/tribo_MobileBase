@@ -14,77 +14,139 @@
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
     <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
 
-    <!-- 바닥 -->
-    <include>
-      <uri>model://ground_plane</uri>
-    </include>
+    <!-- 바닥 (인라인 ground plane, 외부 모델 불필요) -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>100 100</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
 
     <!-- 조명 -->
     <light type="directional" name="sun">
       <cast_shadows>false</cast_shadows>
-      <pose>0 0 2 0 0 0</pose>
+      <pose>0 0 5 0 0 0</pose>
       <diffuse>1 1 1 1</diffuse>
-      <specular>1 1 1 1</specular>
+      <specular>0.5 0.5 0.5 1</specular>
       <attenuation>
         <range>1000</range>
         <constant>1</constant>
         <linear>0</linear>
         <quadratic>0</quadratic>
       </attenuation>
-      <direction>0 0 -1</direction>
+      <direction>-0.3 0.3 -1</direction>
     </light>
 
-    <!-- 벽 4면 (순수 box만 사용) -->
-    <model name="wall_front">
-      <static>true</static>
-      <pose>0 1.5 0.11 0 0 0</pose>
-      <link name="link">
-        <visual name="v">
-          <geometry><box><size>4 0.01 0.44</size></box></geometry>
-        </visual>
-        <collision name="c">
-          <geometry><box><size>4 0.01 0.44</size></box></geometry>
-        </collision>
-      </link>
-    </model>
+    <!-- ===================================================== -->
+    <!--  실내 맵 (8m x 6m). 방3 + 복도 + 문 + 장애물            -->
+    <!--  좌표 X[-4,4], Y[-3,3]. 벽 높이 0.5, 두께 0.1          -->
+    <!--                                                         -->
+    <!--   Room A (좌상)   |   Room C (우)                       -->
+    <!--   [문]=========== |   (장애물 다수)                     -->
+    <!--   복도 ========= [문] ====                              -->
+    <!--   [문]=========== |                                     -->
+    <!--   Room B (좌하)   |                                     -->
+    <!-- ===================================================== -->
 
-    <model name="wall_back">
-      <static>true</static>
-      <pose>0 -1.5 0.11 0 0 3.14</pose>
-      <link name="link">
-        <visual name="v">
-          <geometry><box><size>4 0.01 0.44</size></box></geometry>
-        </visual>
-        <collision name="c">
-          <geometry><box><size>4 0.01 0.44</size></box></geometry>
-        </collision>
-      </link>
-    </model>
+    <!-- 벽은 SDF라 xacro 불가, 개별 모델로 작성. 외벽 4면 -->
+    <model name="wall_north"><static>true</static><pose>0 3 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>8.2 0.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>8.2 0.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
 
-    <model name="wall_left">
-      <static>true</static>
-      <pose>-2 0 0.11 0 0 1.57</pose>
-      <link name="link">
-        <visual name="v">
-          <geometry><box><size>3 0.01 0.44</size></box></geometry>
-        </visual>
-        <collision name="c">
-          <geometry><box><size>3 0.01 0.44</size></box></geometry>
-        </collision>
-      </link>
-    </model>
+    <model name="wall_south"><static>true</static><pose>0 -3 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>8.2 0.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>8.2 0.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
 
-    <model name="wall_right">
-      <static>true</static>
-      <pose>2 0 0.11 0 0 -1.57</pose>
-      <link name="link">
-        <visual name="v">
-          <geometry><box><size>3 0.01 0.44</size></box></geometry>
-        </visual>
-        <collision name="c">
-          <geometry><box><size>3 0.01 0.44</size></box></geometry>
-        </collision>
-      </link>
-    </model>
+    <model name="wall_west"><static>true</static><pose>-4 0 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>0.1 6.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.1 6.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <model name="wall_east"><static>true</static><pose>4 0 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>0.1 6.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.1 6.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <!-- 중앙 세로벽 (X=0). 복도 통과용 문(Y[-0.5,0.5]) -->
+    <model name="wall_mid_top"><static>true</static><pose>0 1.75 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>0.1 2.5 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.1 2.5 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <model name="wall_mid_bot"><static>true</static><pose>0 -1.75 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>0.1 2.5 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.1 2.5 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <!-- Room A / 복도 칸막이 (Y=0.5, X[-4,0]). 문 X[-2.5,-1.5] -->
+    <model name="wall_a1"><static>true</static><pose>-3.25 0.5 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>1.5 0.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>1.5 0.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <model name="wall_a2"><static>true</static><pose>-0.75 0.5 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>1.5 0.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>1.5 0.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <!-- Room B / 복도 칸막이 (Y=-0.5, X[-4,0]). 문 X[-2.5,-1.5] -->
+    <model name="wall_b1"><static>true</static><pose>-3.25 -0.5 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>1.5 0.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>1.5 0.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <model name="wall_b2"><static>true</static><pose>-0.75 -0.5 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>1.5 0.1 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>1.5 0.1 0.5</size></box></geometry>
+        <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material></visual></link></model>
+
+    <!-- ================= 장애물 ================= -->
+    <!-- Room C -->
+    <model name="obs_box1"><static>true</static><pose>2.0 1.5 0.3 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>0.6 0.6 0.6</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.6 0.6 0.6</size></box></geometry>
+        <material><ambient>0.8 0.5 0.2 1</ambient><diffuse>0.8 0.5 0.2 1</diffuse></material></visual></link></model>
+
+    <model name="obs_box2"><static>true</static><pose>2.5 -1.5 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>0.8 0.4 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.8 0.4 0.5</size></box></geometry>
+        <material><ambient>0.8 0.5 0.2 1</ambient><diffuse>0.8 0.5 0.2 1</diffuse></material></visual></link></model>
+
+    <model name="obs_cyl1"><static>true</static><pose>3.0 0.4 0.3 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><cylinder><radius>0.3</radius><length>0.6</length></cylinder></geometry></collision>
+      <visual name="v"><geometry><cylinder><radius>0.3</radius><length>0.6</length></cylinder></geometry>
+        <material><ambient>0.3 0.5 0.8 1</ambient><diffuse>0.3 0.5 0.8 1</diffuse></material></visual></link></model>
+
+    <!-- Room A -->
+    <model name="obs_box3"><static>true</static><pose>-2.5 2.0 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><box><size>0.5 0.5 0.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.5 0.5 0.5</size></box></geometry>
+        <material><ambient>0.8 0.5 0.2 1</ambient><diffuse>0.8 0.5 0.2 1</diffuse></material></visual></link></model>
+
+    <!-- Room B -->
+    <model name="obs_cyl2"><static>true</static><pose>-2.5 -2.0 0.25 0 0 0</pose>
+      <link name="l"><collision name="c"><geometry><cylinder><radius>0.25</radius><length>0.5</length></cylinder></geometry></collision>
+      <visual name="v"><geometry><cylinder><radius>0.25</radius><length>0.5</length></cylinder></geometry>
+        <material><ambient>0.3 0.5 0.8 1</ambient><diffuse>0.3 0.5 0.8 1</diffuse></material></visual></link></model>
+
   </world>
 </sdf>
