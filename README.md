@@ -79,6 +79,23 @@ ssh <robot-user>@<robot-ip>    # 예: ssh dtrp@192.168.210.14
 
 > 로봇마다 **계정명이 다를 수 있습니다.** 라즈베리파이에서 `whoami`로 확인하세요. `tribossh` 같은 alias를 쓴다면 `type tribossh`로 가리키는 `user@host`가 해당 로봇과 맞는지 점검하세요(IP만 바꾸고 옛 계정을 가리키면 인증 단계에서 실패).
 
+### 3-4. SSH 키 등록 (비밀번호 없이 접속)
+
+매번 비밀번호를 입력하지 않도록 PC의 공개키를 로봇에 등록합니다. 자동화 스크립트나 `scp`, 원격 launch에도 필수입니다.
+
+```bash
+# PC에 키가 없다면 먼저 생성 (이미 있으면 생략)
+ls ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519
+
+# 공개키를 로봇에 등록 — 이때 한 번만 비밀번호 입력
+ssh-copy-id <robot-user>@<robot-ip>      # 예: ssh-copy-id tribo@192.168.210.16
+
+# 확인 — 이제 비밀번호 없이 접속돼야 함
+ssh <robot-user>@<robot-ip> 'echo OK'
+```
+
+> 편의를 위해 PC `~/.bashrc`에 alias를 둘 수 있습니다: `alias tribo="ssh tribo@192.168.210.16"`. 로봇이 바뀌면 이 한 줄의 `user@ip`만 갱신하세요.
+
 ---
 
 ## 4. 설치
