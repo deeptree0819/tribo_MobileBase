@@ -31,9 +31,59 @@ Yahboom **Rosmaster STM32 ROS 확장보드** 기반 차동구동(differential dr
 
 ---
 
-## 3. 설치
+## 3. 원격 접속 (SSH) 설정 — 헤드리스 라즈베리파이
 
-### 3-1. 시스템 의존성
+라즈베리파이 기반 로봇은 보통 모니터 없이 PC에서 SSH로 접속해 작업합니다. **새로 설치한 OS는 SSH 서버(sshd)가 없거나 비활성 상태**일 수 있어, 처음 한 번은 직접 켜줘야 합니다.
+
+### 3-1. 증상 진단 (PC에서)
+
+PC에서 접속이 안 될 때, 먼저 원인을 구분합니다.
+
+```bash
+ping -c 3 <robot-ip>           # 호스트가 살아있는지
+nc -vz <robot-ip> 22           # 22번 포트(sshd) 상태
+```
+
+| `nc` 결과 | 의미 | 조치 |
+|-----------|------|------|
+| `succeeded` | sshd 정상 | 바로 `ssh` 접속 (3-3) |
+| `Connection refused` | 호스트는 살아있으나 **sshd 미기동/미설치** | 3-2로 |
+| `timed out` | 방화벽 차단 또는 IP/네트워크 문제 | IP 재확인 / `sudo ufw allow ssh` |
+
+> `ping`은 되는데 `nc ... 22`가 **Connection refused**면 거의 항상 라즈베리파이의 SSH가 꺼져 있는 것입니다(네트워크·IP는 정상).
+
+### 3-2. SSH 서버 설치·활성화 (라즈베리파이 본체에서)
+
+모니터+키보드를 연결하거나 SD카드 콘솔에서 실행합니다.
+
+```bash
+# 이미 설치돼 있고 꺼져만 있다면 이 줄만으로 충분
+sudo systemctl enable --now ssh
+
+# "Unit ssh.service not found"처럼 sshd 자체가 없다면 설치부터
+sudo apt update
+sudo apt install -y openssh-server
+sudo systemctl enable --now ssh
+
+sudo systemctl status ssh      # active (running) 확인
+```
+
+> 헤드리스(모니터 없음)로 처음부터 켜려면: SD카드를 PC에 꽂아 boot 파티션에 **빈 `ssh` 파일**(확장자 없음)을 만들면 부팅 시 자동 활성화됩니다 — `touch /media/$USER/bootfs/ssh` (파티션명은 `ls /media/$USER/`로 확인).
+
+### 3-3. 접속 확인 (PC에서)
+
+```bash
+nc -vz <robot-ip> 22           # 이제 succeeded!
+ssh <robot-user>@<robot-ip>    # 예: ssh dtrp@192.168.210.14
+```
+
+> 로봇마다 **계정명이 다를 수 있습니다.** 라즈베리파이에서 `whoami`로 확인하세요. `tribossh` 같은 alias를 쓴다면 `type tribossh`로 가리키는 `user@host`가 해당 로봇과 맞는지 점검하세요(IP만 바꾸고 옛 계정을 가리키면 인증 단계에서 실패).
+
+---
+
+## 4. 설치
+
+### 4-1. 시스템 의존성
 
 ```bash
 sudo apt update
@@ -45,7 +95,7 @@ sudo apt install -y \
 
 > `python3-serial`(pyserial)은 `tribolib.py`가 보드와 통신하는 데 **유일하게 필요한 외부 파이썬 의존성**입니다. (Yahboom의 `Rosmaster_Lib`는 따로 설치할 필요 없음 — `tribolib.py`가 프로토콜을 자체 구현)
 
-### 3-2. ROS 2 패키지 의존성
+### 4-2. ROS 2 패키지 의존성
 
 ```bash
 sudo apt install -y \
@@ -72,7 +122,7 @@ sudo apt install -y \
   ros-jazzy-ros-gz-image
 ```
 
-### 3-3. 워크스페이스 클론 (서브모듈 포함)
+### 4-3. 워크스페이스 클론 (서브모듈 포함)
 
 `sllidar_ros2`는 서브모듈이므로 `--recurse-submodules`가 필수입니다.
 
@@ -86,7 +136,7 @@ cd ~/tribo_ws/src/tribo
 git submodule update --init --recursive
 ```
 
-### 3-4. 빌드
+### 4-4. 빌드
 
 ```bash
 cd ~/tribo_ws
@@ -97,9 +147,9 @@ source install/setup.bash
 
 ---
 
-## 4. 하드웨어 설정
+## 5. 하드웨어 설정
 
-### 4-1. 시리얼 포트 접근 권한
+### 5-1. 시리얼 포트 접근 권한
 
 `dialout` 그룹에 사용자를 추가해야 보드/라이다 시리얼 포트(`/dev/ttyUSB*`)에 접근할 수 있습니다.
 
@@ -118,7 +168,7 @@ ls -l /dev/serial/by-id/
 #   usb-Silicon_Labs_CP2102N_..._if00-port0       → 라이다(ttyUSB1)
 ```
 
-### 4-2. 보드 포트
+### 5-2. 보드 포트
 
 `tribo_bringup/config/bringup.yaml`의 `port`는 번호 변동이 없는 **by-id 고정 경로**를 사용합니다:
 
@@ -128,7 +178,7 @@ port: "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
 
 보드 모델/USB-시리얼 칩이 다르면 위 `by-id` 경로를 실제 값으로 수정하세요.
 
-### 4-3. 라이다 포트 ⚠️ (새 로봇에서 주의)
+### 5-3. 라이다 포트 ⚠️ (새 로봇에서 주의)
 
 `sllidar_ros2/launch/sllidar_c1_launch.py`의 `serial_port` 기본값은 **특정 라이다 1대의 고유 시리얼 번호**가 박힌 by-id 경로입니다(CP2102N 칩의 일련번호 포함). **새 로봇의 라이다는 번호가 다르므로** 다음 중 하나로 맞춰야 합니다:
 
@@ -144,7 +194,7 @@ ros2 launch sllidar_ros2 sllidar_c1_launch.py \
 
 ---
 
-## 5. ROS_DOMAIN_ID 설정 (PC ↔ 로봇 통신)
+## 6. ROS_DOMAIN_ID 설정 (PC ↔ 로봇 통신)
 
 PC와 로봇이 서로의 토픽을 보려면 **같은 `ROS_DOMAIN_ID`** 를 써야 합니다. `~/.bashrc` 끝에 추가:
 
@@ -158,9 +208,9 @@ source ~/tribo_ws/install/setup.bash
 
 ---
 
-## 6. 실행
+## 7. 실행
 
-### 6-1. 실제 로봇 bringup (보드 + 오도메트리 + 라이다)
+### 7-1. 실제 로봇 bringup (보드 + 오도메트리 + 라이다)
 
 ```bash
 ros2 launch tribo_bringup bringup.launch.py
@@ -180,7 +230,7 @@ bringup + odom만 묶은 코어 런치:
 ros2 launch tribo_bringup core.launch.py
 ```
 
-### 6-2. 동작 테스트
+### 7-2. 동작 테스트
 
 ```bash
 # 전진 명령 (안전을 위해 바퀴를 들고 테스트 권장)
@@ -189,9 +239,9 @@ ros2 topic pub --once /cmd_vel geometry_msgs/Twist "{linear: {x: 0.1}}"
 
 > bringup에는 **watchdog**이 있어 `cmd_vel`이 `cmd_timeout`(기본 0.5초)초 동안 끊기면 모터를 자동 정지합니다.
 
-### 6-3. 맵 만들기 (SLAM)
+### 7-3. 맵 만들기 (SLAM)
 
-SLAM Toolbox로 지도를 작성합니다. (`ros-jazzy-slam-toolbox` 패키지 필요 — 3-2의 의존성 목록에 포함)
+SLAM Toolbox로 지도를 작성합니다. (`ros-jazzy-slam-toolbox` 패키지 필요 — 4-2의 의존성 목록에 포함)
 
 **① 로봇에서: bringup 실행** (모터·오도메트리·라이다·URDF 전체)
 
@@ -238,7 +288,7 @@ scp ~/my_map.yaml ~/my_map.pgm dtrp@192.168.210.14:/home/dtrp/
 
 > **최종 상태**: 로봇 측에 `/home/dtrp/my_map.yaml` + `/home/dtrp/my_map.pgm` 두 파일이 있어야 다음 단계(Navigation)가 동작합니다.
 
-### 6-4. Navigation 실행 (Nav2)
+### 7-4. Navigation 실행 (Nav2)
 
 저장한 맵 위에서 AMCL 자기위치추정 + Nav2 플래너/컨트롤러로 자율 주행합니다.
 
@@ -293,7 +343,7 @@ ros2 topic echo /amcl_pose --once  # 현재 추정 위치
 >
 > 위 예시는 로봇에서 `ros2 launch`를 실행하므로 `map:=/home/dtrp/my_map.yaml`(로봇 홈) 입니다. 만약 PC에서 launch를 실행한다면 PC 입장 경로(`/home/deeptree/...`)로 줘야 합니다. PC의 `/home/deeptree/...`를 로봇 launch에 넘기면 `map_server` configure가 "파일을 못 찾는다"며 실패합니다.
 
-### 6-5. 시뮬레이션 (Gazebo) — SLAM/Nav 실습
+### 7-5. 시뮬레이션 (Gazebo) — SLAM/Nav 실습
 
 실로봇 없이 PC에서 SLAM·Nav2를 실습할 수 있도록 Gazebo(gz-sim) 환경을 제공합니다.
 
@@ -360,7 +410,7 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 
 ---
 
-## 7. 주요 파라미터 파일
+## 8. 주요 파라미터 파일
 
 | 파일 | 설명 |
 |------|------|
@@ -371,12 +421,13 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 
 ---
 
-## 8. 문제 해결
+## 9. 문제 해결
 
 | 증상 | 확인 |
 |------|------|
+| SSH 접속 `Connection refused` | 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3장) |
 | `could not open port /dev/ttyUSB0` | `dialout` 그룹 추가 후 재로그인 했는지, 보드가 연결됐는지 |
 | `ModuleNotFoundError: serial` | `sudo apt install python3-serial` |
 | PC에서 publish해도 로봇이 안 움직임 | PC·로봇 `ROS_DOMAIN_ID` 일치 여부 |
-| 라이다 `/scan` 안 나옴 | 4-3의 라이다 `serial_port` 경로가 실제 장치와 맞는지 |
+| 라이다 `/scan` 안 나옴 | 5-3의 라이다 `serial_port` 경로가 실제 장치와 맞는지 |
 | `sllidar_ros2` 빌드 누락 | `git submodule update --init --recursive` 후 재빌드 |
