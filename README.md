@@ -168,12 +168,23 @@ source install/setup.bash
 
 ### 5-1. 시리얼 포트 접근 권한
 
-`dialout` 그룹에 사용자를 추가해야 보드/라이다 시리얼 포트(`/dev/ttyUSB*`)에 접근할 수 있습니다.
+`dialout` 그룹에 사용자를 추가해야 보드/라이다 시리얼 포트(`/dev/ttyUSB*`)에 접근할 수 있습니다. 추가하지 않으면 bringup이 `could not open port` 로 실패합니다.
 
 ```bash
+# 로봇에서 (SSH로 접속한 상태). sudo 비밀번호를 한 번 입력
 sudo usermod -aG dialout $USER
-# 로그아웃 후 다시 로그인(또는 재부팅)해야 적용됨
+
+# 그룹 변경은 새 로그인 세션부터 적용 → 재로그인(또는 재부팅) 필수
+exit
+ssh <robot-user>@<robot-ip>     # 다시 접속
+# 또는: sudo reboot
+
+# 확인 — 목록에 dialout 이 보이면 성공
+groups
+# tribo adm dialout cdrom sudo ...
 ```
+
+> `/dev/ttyUSB0` 권한은 `crw-rw---- root dialout`이라, dialout 그룹에 들기 전에는 같은 사용자라도 포트를 열 수 없습니다.
 
 CH340 / CP2102 드라이버는 최신 커널에 기본 내장돼 있어 보통 별도 설치가 필요 없습니다.
 연결 확인:
