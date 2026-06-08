@@ -20,6 +20,12 @@ tribo_bringup:
     wz_deadzone: 0.05
     cmd_timeout: 0.50
 
+    # cmd_vel direction (verified on robot 2026-06-08, motors m1~m4 correctly wired):
+    #   invert_cmd_vel=true        -> teleop forward = robot forward
+    #   invert_cmd_vel_angular=true -> teleop left = robot left
+    invert_cmd_vel: true
+    invert_cmd_vel_angular: true
+
     # Per-motor calibration
     gain_m1: 1.000   # FL
     gain_m2: 0.977   # RL
