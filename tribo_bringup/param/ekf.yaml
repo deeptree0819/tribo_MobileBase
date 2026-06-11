@@ -18,11 +18,13 @@ ekf_node:
     world_frame: odom           # GPS 없으므로 odom 기준 (map은 SLAM 띄울 때 자동 연결)
 
     # ----- 엔코더 오도메트리 -----
+    # 회전(yaw/vyaw)은 휠에서 끔: 4륜 스키드라 제자리/급회전 시 바퀴가 헛돌아
+    # 휠 odom yaw가 실제보다 과대적분됨(실측 2026-06-11, 슬립 변동 큼). 회전은 IMU 자이로(vyaw)로.
     odom0: /odom_raw
     odom0_config: [true,  true,  false,    # x, y     사용 (z 미사용)
-                   false, false, true,     # yaw      사용 (roll/pitch 미사용)
+                   false, false, false,    # yaw      미사용 (슬립 → IMU vyaw로 대체)
                    true,  true,  false,    # vx, vy   사용 (vz 미사용)
-                   false, false, true,     # vyaw     사용
+                   false, false, false,    # vyaw     미사용 (슬립 → IMU vyaw로 대체)
                    false, false, false]    # 가속도 미사용
     odom0_queue_size: 10
     odom0_differential: false

@@ -33,6 +33,7 @@ setup(
             'odom_publisher = tribo_odom.odom_publisher:main',
             'odom_source = tribo_odom.odom_source:main',
             'encoder_calib_test = tribo_odom.encoder_calib_test:main',
+            'rotation_calib = tribo_odom.rotation_calib:main',
         ],
     },
 )

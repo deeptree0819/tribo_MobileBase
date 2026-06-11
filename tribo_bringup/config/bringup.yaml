@@ -60,7 +60,7 @@ tribo_bringup:
     imu_topic: "imu/data"
     imu_frame: "base_link"
     imu_rate: 50.0
-    invert_imu_yaw: false   # set true if IMU yaw spins opposite to encoder odom
+    invert_imu_yaw: true    # board gz spins opposite to encoder odom (verified 2026-06-11)
 
     # Battery (board voltage -> sensor_msgs/BatteryState on /battery)
     publish_battery: true

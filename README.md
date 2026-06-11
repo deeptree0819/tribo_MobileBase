@@ -458,6 +458,23 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 | `tribo_odom/config/odom.yaml`          | 오도메트리 파라미터 |
 | `tribo_navigation/config/nav2_params.yaml` | Nav2 설정 |
 
+### 8-1. 회전 odom 캘리브레이션 (실로봇)
+
+4륜 스키드는 제자리/급회전 시 바퀴가 옆으로 헛돌아 휠 odom 회전이 실제보다 과대 적분됩니다. `rotation_calib` 노드가 제자리 회전을 여러 번 시키며 **휠 odom / IMU 자이로(실제) / EKF 융합**의 회전각을 비교해 슬립 정도와 보정값을 산출합니다.
+
+```bash
+# 로봇에서 bringup 실행 후, 별도 터미널에서
+ros2 run tribo_odom rotation_calib --ros-args \
+  -p num_spins:=4 -p spin_duration:=5.0 -p current_track:=0.873
+```
+
+출력 해석:
+- `wheel/IMU` ≈ 1 이고 변동이 작으면 → 유효 트랙이 맞음. 크면 → `track_true` 평균값을 `bringup.launch.py`의 `_odom_common_params` `track_width`에 반영.
+- 슬립 변동(CV)이 크면(>15%) 고정 트랙으로는 한계 → **EKF가 회전을 IMU 자이로로 추정**하도록 설정(현재 기본값). `ekf.yaml`에서 `odom0` yaw/vyaw=false, `imu0` vyaw=true.
+- `EKF/IMU` ≈ 1 이면 내비가 쓰는 `/odom` 회전이 실제와 일치(양호).
+
+> 회전 방향이 IMU와 엔코더가 반대로 나오면 `bringup.yaml`의 `invert_imu_yaw`를 토글하세요. 결과는 출력만 하며 설정을 자동 수정하지 않습니다.
+
 ---
 
 ## 9. 문제 해결

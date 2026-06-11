@@ -279,8 +279,12 @@ def generate_launch_description():
         # forward; rotation stays on invert_rotation (verified on robot 2026-06-10).
         "invert_translation": True,
         "invert_rotation": True,
-        # effective (slip-calibrated) track for odom yaw; overrides physical 0.52 in robot_geom.yaml
-        "track_width": 0.735,
+        # effective (slip-calibrated) track for odom yaw; overrides physical track in
+        # robot_geom.yaml. 4-wheel skid-steer slips laterally on turns, so effective
+        # track > physical 0.70 m. With EKF on, /odom yaw comes from the IMU gyro
+        # (ekf.yaml), so this mainly affects /odom_raw and the use_ekf=false legacy path.
+        # Calibrated via `ros2 run tribo_odom rotation_calib` (IMU gyro ref, 2026-06-11).
+        "track_width": 0.873,
     }
 
     # EKF 사용 시: odom_publisher → /odom_raw (TF 끔). EKF가 /odom + TF 담당.
