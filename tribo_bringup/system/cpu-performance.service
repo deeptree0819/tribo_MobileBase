@@ -1,0 +1,11 @@
+[Unit]
+Description=Set CPU governor to performance (Nav2 needs full clock on Pi5)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor'
+
+[Install]
+WantedBy=multi-user.target

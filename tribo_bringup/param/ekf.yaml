@@ -6,7 +6,8 @@
 # Config mask order (15 bool): x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az
 ekf_node:
   ros__parameters:
-    frequency: 50.0
+    frequency: 30.0           # Pi5에서 Nav2 동시구동 시 50Hz는 'Failed to meet update rate'.
+                              # 30Hz면 지상로봇 odom/TF에 충분하고 CPU 여유 확보.
     sensor_timeout: 0.1
     two_d_mode: true            # 평면 로봇 → z, roll, pitch, vz/vroll/vpitch 강제 0
     publish_tf: true            # EKF가 odom->base_link TF 발행 (odom_publisher TF는 use_ekf=true일 때 끔)

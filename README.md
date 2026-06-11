@@ -230,6 +230,34 @@ ls -l /dev/tribo_base /dev/tribo_lidar
 
 > 칩이 다른 보드/라이다를 쓰면 `bringup.launch.py` 상단의 `_resolve_port(...)` 매칭 문자열과 `udev/99-tribo-serial.rules`의 VID:PID를 함께 바꾸세요.
 
+### 5-4. CPU 거버너 = performance ⚠️ (Pi5 + Nav2 필수)
+
+라즈베리파이 기본 CPU 거버너는 `ondemand`라 부하에 따라 클럭을 **천천히** 올립니다. Nav2 12개 노드가 한꺼번에 뜨는 **버스트 시작** 때 클럭(2.4GHz)이 못 따라와서:
+
+- `controller_server`가 costmap 로딩에 너무 오래 걸려 → `lifecycle_manager: get_state service is not available! Aborting bringup` 으로 **nav 전체가 abort**
+- `ekf_node: Failed to meet update rate!` 스톨 다발
+
+거버너를 `performance`(전 코어 최대 클럭 고정)로 바꾸면 해결됩니다.
+
+```bash
+# 즉시 적용 (재부팅 전까지)
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+# 확인 — performance / 2400000(2.4GHz) 나와야 함
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
+```
+
+재부팅해도 유지하려면 repo의 systemd 서비스를 설치:
+
+```bash
+sudo cp ~/tribo_ws/src/tribo/tribo_bringup/system/cpu-performance.service /etc/systemd/system/
+sudo systemctl enable --now cpu-performance.service
+systemctl status cpu-performance.service     # active (exited) 면 OK
+```
+
+> performance 거버너는 발열·소비전력이 늘어납니다. Pi5는 액티브 쿨러가 있으면 문제없습니다. Nav2를 안 쓰고 bringup만 돌릴 땐 `ondemand`로도 충분합니다.
+
 ---
 
 ## 6. ROS_DOMAIN_ID 설정 (PC ↔ 로봇 통신)
@@ -489,3 +517,6 @@ ros2 run tribo_odom rotation_calib --ros-args \
 | bringup 중복 실행 시 `multiple access on port` | `bringup.launch.py`가 시작 시 이전 인스턴스를 자동 정리함. 끄려면 `TRIBO_AUTOCLEAN=0` |
 | 라이다 `/scan` 안 나옴 | `ls /dev/tribo_lidar`(또는 by-id) 존재 여부, 라이다 전원/USB 연결 |
 | `sllidar_ros2` 빌드 누락 | `git submodule update --init --recursive` 후 재빌드 |
+| Nav2 `get_state service is not available! Aborting bringup` / `ekf_node: Failed to meet update rate!` | CPU 거버너를 `performance`로(5-4). Pi5에서 거의 항상 이 원인. RViz는 PC에서(`use_rviz:=false`) |
+| nav/bringup을 Ctrl-C로 껐는데 노드가 안 죽고 남음 | `ros2 launch`는 Ctrl-C 한 번만 처리(이후 무시), sllidar는 종료 느림. 재실행 전 `pkill -9 -f 'ros-args'`로 잔여 노드 정리 (bringup auto-clean은 nav 노드는 안 건드림) |
+| `odom_publisher: No package metadata was found for tribo-odom` | entry point 추가 후 증분 빌드 깨짐. `rm -rf build/tribo_odom install/tribo_odom src/tribo/tribo_odom/tribo_odom.egg-info && colcon build --packages-select tribo_odom --symlink-install` |
