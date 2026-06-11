@@ -196,29 +196,39 @@ ls -l /dev/serial/by-id/
 #   usb-Silicon_Labs_CP2102N_..._if00-port0       → 라이다(ttyUSB1)
 ```
 
-### 5-2. 보드 포트
+### 5-2. USB 장치 고정 이름 (udev) — 권장
 
-`tribo_bringup/config/bringup.yaml`의 `port`는 번호 변동이 없는 **by-id 고정 경로**를 사용합니다:
+USB 포트를 다른 소켓에 꽂거나 부팅 순서가 바뀌면 `/dev/ttyUSB0`↔`ttyUSB1`이 뒤바뀌어 **보드와 라이다가 서로 포트를 뺏는** 문제(보드 `multiple access on port`, 라이다 `OPERATION_TIMEOUT`)가 생길 수 있습니다. udev 규칙으로 칩 종류(VID:PID) 기반 고정 심볼릭을 만들어 원천 차단합니다.
 
-```yaml
-port: "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
-```
-
-보드 모델/USB-시리얼 칩이 다르면 위 `by-id` 경로를 실제 값으로 수정하세요.
-
-### 5-3. 라이다 포트 ⚠️ (새 로봇에서 주의)
-
-`sllidar_ros2/launch/sllidar_c1_launch.py`의 `serial_port` 기본값은 **특정 라이다 1대의 고유 시리얼 번호**가 박힌 by-id 경로입니다(CP2102N 칩의 일련번호 포함). **새 로봇의 라이다는 번호가 다르므로** 다음 중 하나로 맞춰야 합니다:
+repo에 규칙 파일이 포함돼 있습니다: `tribo_bringup/udev/99-tribo-serial.rules`
 
 ```bash
-# (A) 런치 시 인자로 직접 지정
-ros2 launch sllidar_ros2 sllidar_c1_launch.py \
-  serial_port:=/dev/serial/by-id/<새-라이다-by-id>
+# 로봇에서 (sudo 비밀번호 1회)
+sudo cp ~/tribo_ws/src/tribo/tribo_bringup/udev/99-tribo-serial.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
 
-# (B) 또는 launch 파일의 serial_port 기본값을 자기 로봇 값으로 수정
+# 확인 — 두 심볼릭이 보이면 성공
+ls -l /dev/tribo_base /dev/tribo_lidar
+#  /dev/tribo_base  -> ../../ttyUSB0
+#  /dev/tribo_lidar -> ../../ttyUSB1
 ```
 
-> 이 서브모듈 변경은 로봇마다 다르므로 보통 커밋하지 않고 로컬에만 둡니다.
+| 장치 | 매칭 기준 | 고정 이름 |
+|------|-----------|-----------|
+| 보드 (CH340)     | VID:PID `1a86:7523` | `/dev/tribo_base`  |
+| 라이다 (CP2102N) | VID:PID `10c4:ea60` | `/dev/tribo_lidar` |
+
+> - 보드/라이다 칩이 위와 다르면 규칙 파일의 VID:PID를 자기 장치 값(`udevadm info -q property -n /dev/ttyUSB0`의 `ID_VENDOR_ID`/`ID_MODEL_ID`)으로 바꾸세요.
+> - 같은 칩(예: CP2102N 2개)을 동시에 꽂는 경우에만 VID:PID로 구분이 안 됩니다. 그땐 규칙 파일 주석대로 라이다 줄에 `ATTRS{serial}=="<고유시리얼>"`을 추가하세요.
+
+### 5-3. 보드·라이다 포트 해석 (자동)
+
+`bringup.launch.py`가 시작할 때 포트를 **자동 해석**합니다 — udev 심볼릭(`/dev/tribo_base`, `/dev/tribo_lidar`)이 있으면 그것을, 없으면 `/dev/serial/by-id/` 경로로 폴백합니다. 따라서 **5-2의 udev 설치를 건너뛰어도** by-id로 동작하고, ttyUSB 번호 변동에는 항상 안전합니다.
+
+- **보드**: `bringup.yaml`에는 `port`를 두지 않고 launch가 해석한 값을 사용합니다.
+- **라이다**: `bringup.launch.py`가 해석한 `serial_port`를 sllidar 런치에 넘깁니다 — `sllidar_c1_launch.py`를 직접 고칠 필요가 없습니다.
+
+> 칩이 다른 보드/라이다를 쓰면 `bringup.launch.py` 상단의 `_resolve_port(...)` 매칭 문자열과 `udev/99-tribo-serial.rules`의 VID:PID를 함께 바꾸세요.
 
 ---
 
@@ -442,7 +452,8 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 
 | 파일 | 설명 |
 |------|------|
-| `tribo_bringup/config/bringup.yaml`    | 시리얼 포트, 모터별 gain, PWM 최소듀티, cmd 안전(deadzone/timeout) |
+| `tribo_bringup/config/bringup.yaml`    | 모터별 gain, PWM 최소듀티, cmd 안전(deadzone/timeout) — 시리얼 `port`는 launch가 해석(5-3) |
+| `tribo_bringup/udev/99-tribo-serial.rules` | USB 장치 고정 이름 udev 규칙 (`/dev/tribo_base`, `/dev/tribo_lidar`) |
 | `tribo_bringup/config/robot_geom.yaml` | 공유 기구 파라미터 (track_width, wheel_radius, ticks_per_rev) |
 | `tribo_odom/config/odom.yaml`          | 오도메트리 파라미터 |
 | `tribo_navigation/config/nav2_params.yaml` | Nav2 설정 |
@@ -454,8 +465,10 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 | 증상 | 확인 |
 |------|------|
 | SSH 접속 `Connection refused` | 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3장) |
-| `could not open port /dev/ttyUSB0` | `dialout` 그룹 추가 후 재로그인 했는지, 보드가 연결됐는지 |
+| `could not open port ...` | `dialout` 그룹 추가 후 재로그인 했는지(5-1), 보드가 연결됐는지 |
 | `ModuleNotFoundError: serial` | `sudo apt install python3-serial` |
 | PC에서 publish해도 로봇이 안 움직임 | PC·로봇 `ROS_DOMAIN_ID` 일치 여부 |
-| 라이다 `/scan` 안 나옴 | 5-3의 라이다 `serial_port` 경로가 실제 장치와 맞는지 |
+| 보드·라이다가 서로 포트를 뺏음 (`multiple access` / 라이다 `OPERATION_TIMEOUT`) | udev 규칙 설치(5-2). 미설치 시에도 launch가 by-id로 해석하지만, udev 설치를 권장 |
+| bringup 중복 실행 시 `multiple access on port` | `bringup.launch.py`가 시작 시 이전 인스턴스를 자동 정리함. 끄려면 `TRIBO_AUTOCLEAN=0` |
+| 라이다 `/scan` 안 나옴 | `ls /dev/tribo_lidar`(또는 by-id) 존재 여부, 라이다 전원/USB 연결 |
 | `sllidar_ros2` 빌드 누락 | `git submodule update --init --recursive` 후 재빌드 |

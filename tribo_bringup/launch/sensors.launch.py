@@ -5,6 +5,14 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+
+# Lidar serial port (Silicon Labs CP2102N). Use by-id so it never collides with the
+# base board (CH340 -> usb-1a86_USB_Serial); raw /dev/ttyUSB0 ordering is not stable.
+LIDAR_SERIAL_PORT = (
+    "/dev/serial/by-id/"
+    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
+    "c4c4102ee863ef1196dcdaa9c169b110-if00-port0"
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -17,15 +25,20 @@ def _include_lidar(context, *args, **kwargs):
 
     pkg = LaunchConfiguration("lidar_launch_pkg").perform(context)
     lf = LaunchConfiguration("lidar_launch_file").perform(context)
+    serial_port = LaunchConfiguration("lidar_serial_port").perform(context)
 
     launch_path = os.path.join(get_package_share_directory(pkg), "launch", lf)
-    return [IncludeLaunchDescription(PythonLaunchDescriptionSource(launch_path))]
+    return [IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(launch_path),
+        launch_arguments={"serial_port": serial_port}.items(),
+    )]
 
 def generate_launch_description():
     # Start lidar driver launch (optional)
     declare_use = DeclareLaunchArgument("use_lidar", default_value="true")
     declare_pkg = DeclareLaunchArgument("lidar_launch_pkg", default_value="sllidar_ros2")
     declare_file = DeclareLaunchArgument("lidar_launch_file", default_value="sllidar_c1_launch.py")
+    declare_port = DeclareLaunchArgument("lidar_serial_port", default_value=LIDAR_SERIAL_PORT)
 
     # Frames
     declare_base = DeclareLaunchArgument("base_frame", default_value="base_link")
@@ -54,7 +67,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        declare_use, declare_pkg, declare_file,
+        declare_use, declare_pkg, declare_file, declare_port,
         declare_base, declare_lidar,
         declare_x, declare_y, declare_z, declare_yaw,
         static_tf,

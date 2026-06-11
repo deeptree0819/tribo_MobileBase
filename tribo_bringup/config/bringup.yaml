@@ -1,8 +1,9 @@
 # tribo_bringup (hardware + teleop interface)
 tribo_bringup:
   ros__parameters:
-    # Serial
-    port: "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+    # Serial — port is set by bringup.launch.py (resolved udev /dev/tribo_base, or
+    # by-id fallback). Left unset here so the launch value is authoritative; for a
+    # standalone `ros2 run`, the node default (base by-id) applies.
     baudrate: 115200
     car_type: 1
 

@@ -1,0 +1,17 @@
+# Tribo robot serial devices — stable /dev names independent of USB socket and
+# ttyUSB enumeration order. Install:
+#   sudo cp 99-tribo-serial.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# Verify:  ls -l /dev/tribo_base /dev/tribo_lidar
+#
+# Base board (Yahboom Rosmaster STM32, CH340 USB-serial). CH340 has no unique
+# serial, so it is matched by vendor:product only — valid while it is the sole
+# 1a86:7523 device on the robot.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="tribo_base", MODE="0660", GROUP="dialout"
+
+# RPLiDAR C1 (Silicon Labs CP2102N), matched by vendor:product so the rule works
+# on any tribo robot without editing. If you ever connect two CP2102N devices at
+# once, disambiguate by appending this robot's unique serial, e.g.:
+#   ATTRS{serial}=="c4c4102ee863ef1196dcdaa9c169b110"
+# (find it with: udevadm info -q property -n /dev/ttyUSB1 | grep ID_SERIAL_SHORT)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="tribo_lidar", MODE="0660", GROUP="dialout"

@@ -13,7 +13,131 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 
+def _resolve_port(preferred, *by_id_substrings):
+    """Pick a stable serial-device path that survives USB re-plugging / ttyUSB
+    renumbering.
+
+    Prefers the udev symlink (see tribo_bringup/udev/99-tribo-serial.rules,
+    e.g. /dev/tribo_base, /dev/tribo_lidar). If that symlink is not present
+    (rule not installed yet, or a freshly flashed robot), falls back to the
+    matching /dev/serial/by-id entry. Both are device-identity based, never the
+    unstable /dev/ttyUSBN number.
+    """
+    if os.path.exists(preferred):
+        return preferred
+    by_id_dir = "/dev/serial/by-id"
+    try:
+        for name in sorted(os.listdir(by_id_dir)):
+            if any(s in name for s in by_id_substrings):
+                return os.path.join(by_id_dir, name)
+    except OSError:
+        pass
+    return preferred  # nothing found; node will report a clear "no such device"
+
+
+# Base board (Yahboom STM32, CH340) and LiDAR (Silicon Labs CP2102N) serial ports.
+# udev symlink first, by-id fallback. They have distinct VID:PID, so they can
+# never be confused even if the USB socket or ttyUSB order changes.
+BASE_SERIAL_PORT = _resolve_port("/dev/tribo_base", "1a86_USB_Serial")
+LIDAR_SERIAL_PORT = _resolve_port(
+    "/dev/tribo_lidar", "c4c4102ee863ef1196dcdaa9c169b110", "CP2102N"
+)
+
+
+# Node process names (/proc/<pid>/comm) that THIS launch starts. comm is
+# truncated to 15 chars by the kernel, so the long publishers appear cut.
+# Matching on comm (not cmdline) means the running 'ros2 launch' process
+# (comm 'ros2'/'python3') is never matched -> we can't kill ourselves.
+BRINGUP_NODE_COMMS = {
+    "bringup",          # tribo_bringup base-board driver (holds base serial)
+    "sllidar_node",     # lidar driver (holds lidar serial)
+    "odom_publisher",   # tribo_odom  -> /odom_raw or /odom + TF
+    "ekf_node",         # robot_localization -> /odom + TF
+    "joint_state_pub",  # joint_state_publisher (comm truncated)
+    "robot_state_pub",  # robot_state_publisher (comm truncated)
+}
+
+
+def _clean_stale_nodes():
+    """Kill leftover nodes from a previous bringup before this one starts.
+
+    A hard-killed or terminal-closed bringup orphans its child nodes. On the
+    next launch those orphans cause two failure modes:
+      1) serial: the base-board / lidar port is still held -> 'multiple access
+         on port' / lidar 'OPERATION_TIMEOUT'.
+      2) duplicate ROS nodes: a second odom_publisher / ekf_node keeps
+         publishing /odom and the odom->base_link TF, silently corrupting
+         odometry even though nothing errors out.
+
+    We scan /proc and SIGKILL a process if it either (a) holds one of our exact
+    serial devices, or (b) has a comm in BRINGUP_NODE_COMMS. comm-matching never
+    hits this launch process (comm 'ros2'/'python3'), and the new nodes are not
+    spawned until generate_launch_description() returns, so only OLD instances
+    match. No fuser/pkill, no cmdline pattern matching. Disable with
+    TRIBO_AUTOCLEAN=0; this assumes bringup is the sole owner of these nodes
+    (e.g. a separate slam/nav launch should not be relying on bringup's
+    robot_state_publisher staying up across a bringup restart).
+    """
+    if os.environ.get("TRIBO_AUTOCLEAN", "1") == "0":
+        return
+
+    import signal
+    import time
+
+    ports = set()
+    for p in (BASE_SERIAL_PORT, LIDAR_SERIAL_PORT):
+        try:
+            ports.add(os.path.realpath(p))
+        except OSError:
+            pass
+
+    mypid = os.getpid()
+    killed = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == mypid:
+            continue
+
+        match = False
+        # (b) comm name
+        try:
+            with open(os.path.join("/proc", pid, "comm")) as f:
+                if f.read().strip() in BRINGUP_NODE_COMMS:
+                    match = True
+        except OSError:
+            pass
+
+        # (a) holds one of our serial devices
+        if not match and ports:
+            fd_dir = os.path.join("/proc", pid, "fd")
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        if os.readlink(os.path.join(fd_dir, fd)) in ports:
+                            match = True
+                            break
+                    except OSError:
+                        continue
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                pass
+
+        if match:
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+                killed.append(pid)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    if killed:
+        print(f"[tribo_bringup] auto-clean: killed stale node pid(s) {killed}")
+        time.sleep(1.0)  # let the OS release serial fds / node names
+
+
 def generate_launch_description():
+    # Clean up a previous (hard-killed) bringup before any node starts, so a
+    # re-launch neither hits a held serial port nor leaves duplicate odom/TF
+    # nodes. Runs synchronously here, before the launch service spawns nodes.
+    _clean_stale_nodes()
+
     pkg_bringup = get_package_share_directory("tribo_bringup")
 
     # --- arguments ---
@@ -35,6 +159,7 @@ def generate_launch_description():
     # lidar
     use_lidar = LaunchConfiguration("use_lidar")
     lidar_frame_id = LaunchConfiguration("lidar_frame_id")
+    lidar_serial_port = LaunchConfiguration("lidar_serial_port")
 
     declare_geom = DeclareLaunchArgument(
         "geom_file",
@@ -104,6 +229,11 @@ def generate_launch_description():
         default_value="laser_link",
         description="LiDAR frame_id (must exist in TF, e.g., base_link->laser_link in URDF)",
     )
+    declare_lidar_port = DeclareLaunchArgument(
+        "lidar_serial_port",
+        default_value=LIDAR_SERIAL_PORT,
+        description="LiDAR serial port (by-id, so it never collides with the base board)",
+    )
 
     # --- nodes ---
     bringup_node = Node(
@@ -111,7 +241,9 @@ def generate_launch_description():
         executable="bringup",
         name="tribo_bringup",
         output="screen",
-        parameters=[geom_file, params_file],
+        # {"port": ...} last -> overrides bringup.yaml so the resolved udev/by-id
+        # base port is authoritative (mirrors how the lidar port is passed).
+        parameters=[geom_file, params_file, {"port": BASE_SERIAL_PORT}],
     )
 
     joint_state_pub = Node(
@@ -142,7 +274,10 @@ def generate_launch_description():
         "base_frame": "base_link",
         "invert_left": False,
         "invert_right": False,
-        "invert_translation": False,
+        # Board reports NEGATIVE encoder ticks for physical forward motion since the
+        # invert_cmd_vel fix (commit 0535b1b). Flip translation so odom integrates
+        # forward; rotation stays on invert_rotation (verified on robot 2026-06-10).
+        "invert_translation": True,
         "invert_rotation": True,
         # effective (slip-calibrated) track for odom yaw; overrides physical 0.52 in robot_geom.yaml
         "track_width": 0.735,
@@ -197,6 +332,7 @@ def generate_launch_description():
         condition=IfCondition(use_lidar),
         launch_arguments={
             "frame_id": lidar_frame_id,
+            "serial_port": lidar_serial_port,
         }.items(),
     )
 
@@ -214,6 +350,7 @@ def generate_launch_description():
             declare_ekf_params,
             declare_use_lidar,
             declare_lidar_frame,
+            declare_lidar_port,
 
             bringup_node,
             odom_node_with_ekf,
