@@ -35,6 +35,7 @@ setup(
         'console_scripts': [
             'bringup = tribo_bringup.bringup:main',
             'motor_calib = tribo_bringup.motor_calib:main',
+            'motor_seq_test = tribo_bringup.motor_seq_test:main',
         ],
     },
 )
