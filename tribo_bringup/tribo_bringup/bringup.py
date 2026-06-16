@@ -73,6 +73,14 @@ class TriboBringupTribolib(Node):
         # |x|>0 일 때 최소 듀티(%)를 설정
         self.declare_parameter("pwm_min_percent", 20.0)    # 0~100
 
+        # ---- 회전 전용 PWM 부스트 ----
+        # 4륜 스키드-스티어는 제자리 회전 시 횡방향 타이어 스크럽 마찰로 stall한다.
+        # 회전 성분(wz)이 유의미할 때만 그 회전에 기여하는 바퀴의 PWM 바닥을
+        # rotate_pwm_min 으로 올려서 stall을 넘긴다.
+        # 순수 직진(|wz|이 임계 미만)에는 절대 적용되지 않으며 기존 pwm_min_percent만 쓴다.
+        self.declare_parameter("rotate_pwm_min", 45.0)         # 회전 시 적용 최소 듀티(%) (>= pwm_min_percent 권장)
+        self.declare_parameter("rotate_wz_threshold", 0.10)    # |wz(turn_scale 적용 후)|가 이 값 이상이면 회전으로 간주 [rad/s]
+
         # ---- Debug / telemetry ----
         self.declare_parameter("debug_tx", False)
         self.declare_parameter("publish_wheel_speed", True)
@@ -131,6 +139,10 @@ class TriboBringupTribolib(Node):
 
         self.pwm_min_percent = float(self.get_parameter("pwm_min_percent").value)
         self.pwm_min_percent = self._clamp(self.pwm_min_percent, 0.0, 100.0)
+
+        self.rotate_pwm_min = float(self.get_parameter("rotate_pwm_min").value)
+        self.rotate_pwm_min = self._clamp(self.rotate_pwm_min, 0.0, 100.0)
+        self.rotate_wz_threshold = float(self.get_parameter("rotate_wz_threshold").value)
 
         self.debug_tx = bool(self.get_parameter("debug_tx").value)
         self.publish_wheel_speed = bool(self.get_parameter("publish_wheel_speed").value)
@@ -213,6 +225,7 @@ class TriboBringupTribolib(Node):
             f"gain=({self.gain['m1']:.2f},{self.gain['m2']:.2f},"
             f"{self.gain['m3']:.2f},{self.gain['m4']:.2f}), "
             f"pwm_min_percent={self.pwm_min_percent:.1f}, "
+            f"rotate_pwm_min={self.rotate_pwm_min:.1f} (wz_thr={self.rotate_wz_threshold:.2f}), "
             f"publish_imu={self.publish_imu} (topic={self.imu_topic}, frame={self.imu_frame}), "
             f"publish_battery={self.publish_battery} (topic={self.battery_topic})"
         )
@@ -234,18 +247,23 @@ class TriboBringupTribolib(Node):
         qw = cr * cp * cy + sr * sp * sy
         return qx, qy, qz, qw
 
-    def _to_pwm_percent(self, x_norm: float) -> int:
+    def _to_pwm_percent(self, x_norm: float, pwm_min: float = None) -> int:
         """
         -1~1 정규화 값을 -100~100 범위의 PWM(%)로 변환.
-        |x_norm|>0이면 최소 pwm_min_percent 이상이 되도록 보정.
+        |x_norm|>0이면 최소 pwm_min 이상이 되도록 보정.
+
+        pwm_min 미지정 시 기본 self.pwm_min_percent(정지마찰 바닥)을 사용.
+        회전 stall 보정 시 cb_cmd가 해당 바퀴에만 rotate_pwm_min을 넘겨준다.
         """
         if abs(x_norm) < 1e-6:
             return 0
+        if pwm_min is None:
+            pwm_min = self.pwm_min_percent
         s = 1 if x_norm > 0 else -1
         a = self._clamp(abs(x_norm), 0.0, 1.0)
 
         # 최소 듀티 확보 (deadzone 넘어가도록)
-        p = self.pwm_min_percent + a * (100.0 - self.pwm_min_percent)
+        p = pwm_min + a * (100.0 - pwm_min)
         p = self._clamp(p, 0.0, 100.0)
         return int(round(s * p))
 
@@ -327,11 +345,21 @@ class TriboBringupTribolib(Node):
         n3 = self.apply_gain_norm(right_norm, self.gain["m3"], self.invert["m3"])
         n4 = self.apply_gain_norm(right_norm, self.gain["m4"], self.invert["m4"])
 
+        # ---- 회전 전용 PWM 바닥 선택 ----
+        # 회전 성분(wz)이 임계 이상일 때만 회전에 기여하는 모든 바퀴의 PWM 바닥을
+        # rotate_pwm_min으로 올린다(스크럽 마찰 극복). 순수 직진(|wz|<임계)에는
+        # 기존 pwm_min_percent가 그대로 적용되어 직진 거동에 영향이 없다.
+        # (rotate_pwm_min < pwm_min_percent로 잘못 설정돼도 max로 안전하게 바닥 보장)
+        if abs(wz) >= self.rotate_wz_threshold:
+            pwm_floor = max(self.rotate_pwm_min, self.pwm_min_percent)
+        else:
+            pwm_floor = self.pwm_min_percent
+
         # -1~1 → -100~100 (%)
-        m1 = self._to_pwm_percent(n1)
-        m2 = self._to_pwm_percent(n2)
-        m3 = self._to_pwm_percent(n3)
-        m4 = self._to_pwm_percent(n4)
+        m1 = self._to_pwm_percent(n1, pwm_floor)
+        m2 = self._to_pwm_percent(n2, pwm_floor)
+        m3 = self._to_pwm_percent(n3, pwm_floor)
+        m4 = self._to_pwm_percent(n4, pwm_floor)
 
         self._send_pwm(m1, m2, m3, m4)
         self.last_cmd_time = self.get_clock().now()

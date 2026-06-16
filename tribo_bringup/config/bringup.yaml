@@ -46,6 +46,12 @@ tribo_bringup:
     # Minimum PWM to overcome static friction (0~100)
     pwm_min_percent: 35.0
 
+    # Rotation-only PWM boost (skid-steer lateral scrub friction stalls in-place turns).
+    # Applied ONLY when |wz| (after turn_scale) >= rotate_wz_threshold; pure straight
+    # driving keeps pwm_min_percent (no effect). Tuned on-floor 2026-06-15.
+    rotate_pwm_min: 45.0          # min PWM duty (%) for wheels contributing to rotation
+    rotate_wz_threshold: 0.10     # rad/s; |wz| above this is treated as a turn
+
     # Debug / telemetry
     debug_hw: false
     debug_tx: false
