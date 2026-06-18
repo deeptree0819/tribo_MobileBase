@@ -252,8 +252,13 @@ cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq
 
 ```bash
 sudo cp ~/tribo_ws/src/tribo/tribo_bringup/system/cpu-performance.service /etc/systemd/system/
+sudo systemctl daemon-reload
 sudo systemctl enable --now cpu-performance.service
-systemctl status cpu-performance.service     # active (exited) 면 OK
+systemctl is-enabled cpu-performance.service                 # enabled 면 OK
+systemctl is-active  cpu-performance.service                 # active 면 OK
+
+# 재부팅 후 검증 — 4코어 전부 performance 나와야 함
+cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 ```
 
 > performance 거버너는 발열·소비전력이 늘어납니다. Pi5는 액티브 쿨러가 있으면 문제없습니다. Nav2를 안 쓰고 bringup만 돌릴 땐 `ondemand`로도 충분합니다.
