@@ -524,6 +524,7 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 | 파일 | 설명 |
 |------|------|
 | `tribo_bringup/config/bringup.yaml`    | 모터별 gain, PWM 최소듀티, cmd 안전(deadzone/timeout) — 시리얼 `port`는 launch가 해석(5-3) |
+| `tribo_bringup/config/motor_calib.yaml` | **로봇별** 모터 gain 오버라이드 (자동 캘리브 결과, 8-2). **gitignore** — 커밋 안 함. 있으면 launch가 bringup.yaml 뒤에 로드해 덮어씀 |
 | `tribo_bringup/udev/99-tribo-serial.rules` | USB 장치 고정 이름 udev 규칙 (`/dev/tribo_base`, `/dev/tribo_lidar`) |
 | `tribo_bringup/config/robot_geom.yaml` | 공유 기구 파라미터 (track_width, wheel_radius, ticks_per_rev) |
 | `tribo_odom/config/odom.yaml`          | 오도메트리 파라미터 |
@@ -545,6 +546,38 @@ ros2 run tribo_odom rotation_calib --ros-args \
 - `EKF/IMU` ≈ 1 이면 내비가 쓰는 `/odom` 회전이 실제와 일치(양호).
 
 > 회전 방향이 IMU와 엔코더가 반대로 나오면 `bringup.yaml`의 `invert_imu_yaw`를 토글하세요. 결과는 출력만 하며 설정을 자동 수정하지 않습니다.
+
+### 8-2. 모터 게인 자동 캘리브레이션 (실로봇) &nbsp;·&nbsp; 🤖 로봇 전용
+
+로봇마다 4개 모터(m1=FL, m2=RL, m3=RR, m4=FR)의 개체 편차가 있어, 같은 PWM에도 바퀴 속도가 달라 직진이 틀어집니다. `motor_calib` 노드가 **전진 시 4모터의 엔코더 tick rate를 측정 → 가장 느린 모터에 맞춰 나머지 gain을 낮춤**을 반복해, 불균형이 임계치(기본 5%) 미만으로 **수렴할 때까지** 자동 보정합니다.
+
+**결과는 로봇별 파일 `config/motor_calib.yaml`에 저장**되고(gitignore — 값이 로봇마다 다르므로 커밋하지 않음), `bringup.launch.py`가 이 파일이 있으면 `bringup.yaml` 뒤에 오버라이드로 로드합니다. 소스를 고쳐도 install 복사본은 별개라(install config 미반영 함정), 스크립트가 매 반복 `colcon build`로 install에 반영합니다.
+
+```bash
+# ⚠️ 반드시 바퀴를 들고(로봇을 받침대에 올려) 실행 — 모터가 실제로 회전합니다.
+export ROS_DOMAIN_ID=20
+source /opt/ros/jazzy/setup.bash && source ~/tribo_ws/install/setup.bash
+bash ~/tribo_ws/src/tribo/tribo_bringup/scripts/motor_calib_converge.sh
+# 반복 상한/허용오차 조정: MAX_ITER=8 TOL=0.05 를 앞에 붙여 실행
+```
+
+스크립트는 매 반복마다 `bringup 기동 → /encoder_raw 대기 → 캘리브 시퀀스(모터 회전) → gain 기록 → 재빌드 → 재시작`을 수행하고, 끝에 **자동 진단**을 출력합니다:
+
+| VERDICT | 의미 | 조치 |
+|---------|------|------|
+| `PASS` | 불균형 < TOL 수렴 | 완료. 바닥에서 직진성 확인 후 커밋 |
+| `NOT_CONVERGED` | 아직 임계 초과(문제 아님) | 재실행하면 **저장된 gain에서 이어서** 수렴(모터 비선형 때문에 여러 번 필요). 반영은 재부팅 후에도 유지됨 |
+| `FAIL_STUCK m{X}` | 모터 X가 거의 안 돎 | `pwm_min_percent` 상향 또는 배선/기계 저항 점검 (gain으로 해결 불가) |
+| `FAIL_SIGN m{X}` | 모터 X 회전 방향 반대 | `bringup.yaml`의 `invert_m{X}` 토글 후 재실행 |
+
+수렴 후 확인:
+```bash
+ros2 param get /tribo_bringup gain_m1     # motor_calib.yaml 값이 나오면 반영됨
+```
+
+> - **바퀴를 든 채로는 회전 관련 추천(`turn_scale`, `gain_*_rev_factor`)이 무의미**합니다 — 로봇이 실제로 안 돌아 `yaw_rate≈0`이라 값이 터무니없이 나옵니다. 직진 gain(`gain_m*`)만 신뢰하고 회전 보정은 바닥에서 8-1로 하세요.
+> - 전진 시 엔코더가 음수로 찍히는 로봇에서는 레거시 로그에 `[직진] 좌/우 부호` 경고가 뜰 수 있으나, 자동 진단 `VERDICT`가 `FAIL_SIGN`이 아니면 **정상**(거짓 경고)입니다.
+> - "가장 느린 모터 기준"이라 빠른 모터가 많이 눌려 **최고 직진 속도가 느린 모터 수준으로 제한**됩니다. 균형 대신 속도를 더 살리려면 기준을 평균으로 바꾸는 옵션을 추가할 수 있습니다.
 
 ---
 
