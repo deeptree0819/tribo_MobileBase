@@ -236,14 +236,27 @@ def generate_launch_description():
     )
 
     # --- nodes ---
+    # Per-robot motor gain override (motor_calib.py / motor_calib_converge.sh
+    # auto-generates it, .gitignore'd). Loaded AFTER bringup.yaml so its
+    # gain_m1~m4 override the shared defaults; ROS2 applies later param files on
+    # top of earlier ones. The path is the install-share copy (same as
+    # bringup.yaml) — motor_calib.py writes the SOURCE config, and a colcon build
+    # copies it here (install config is a separate copy, not symlinked). If the
+    # file does not exist yet (never calibrated), it is simply skipped.
+    bringup_params = [geom_file, params_file]
+    motor_calib_file = os.path.join(pkg_bringup, "config", "motor_calib.yaml")
+    if os.path.exists(motor_calib_file):
+        bringup_params.append(motor_calib_file)
+    # {"port": ...} last -> overrides bringup.yaml so the resolved udev/by-id
+    # base port is authoritative (mirrors how the lidar port is passed).
+    bringup_params.append({"port": BASE_SERIAL_PORT})
+
     bringup_node = Node(
         package="tribo_bringup",
         executable="bringup",
         name="tribo_bringup",
         output="screen",
-        # {"port": ...} last -> overrides bringup.yaml so the resolved udev/by-id
-        # base port is authoritative (mirrors how the lidar port is passed).
-        parameters=[geom_file, params_file, {"port": BASE_SERIAL_PORT}],
+        parameters=bringup_params,
     )
 
     joint_state_pub = Node(

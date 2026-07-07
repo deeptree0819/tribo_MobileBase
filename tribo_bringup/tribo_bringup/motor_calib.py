@@ -23,9 +23,13 @@ Notes:
 """
 
 import math
+import os
 import statistics
+import tempfile
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
+
+import yaml
 
 import rclpy
 from rclpy.node import Node
@@ -34,6 +38,14 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from std_msgs.msg import Int32MultiArray
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
+
+
+# Default source-tree path of the per-robot override file that bringup.launch.py
+# loads (see config/motor_calib.yaml). Not the install-share copy: motor_calib
+# writes the SOURCE and the converge script rebuilds so install picks it up.
+DEFAULT_CALIB_YAML = os.path.expanduser(
+    "~/tribo_ws/src/tribo/tribo_bringup/config/motor_calib.yaml"
+)
 
 
 def quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
@@ -62,6 +74,99 @@ def diff_int32(curr: int, prev: int) -> int:
     if d & 0x80000000:
         d -= 0x100000000
     return int(d)
+
+
+# =============================================================================
+#  진단(자동) — 순수 함수. rclpy 의존 없음 → 오프라인 단위테스트 가능.
+# =============================================================================
+
+# verdict → 권장 문구 매핑. FAIL_SIGN 은 {X} 에 문제 모터 번호를 채운다.
+RECOMMEND = {
+    "FAIL_STUCK": "pwm_min_percent 상향 또는 배선/기계 저항 점검",
+    "FAIL_SIGN": "bringup.yaml invert_m{X} 토글",
+    "NOT_CONVERGED": "비선형/포화 가능성, 재실행 또는 tol 완화 검토",
+    "PASS": "직진성 실주행 점검 후 커밋",
+}
+
+
+@dataclass
+class Diagnosis:
+    verdict: str            # PASS | FAIL_STUCK | FAIL_SIGN | NOT_CONVERGED
+    imbalance: float        # (max_r - min_r) / mean_r
+    flags: List[str]        # 예: ["STUCK m2", "SIGN_FLIP m3"]
+    recommendation: str     # 사람이 읽는 권장 문구
+    min_index: int          # |rate| 최저 모터의 0-based 인덱스(=보정 기준)
+    abs_rates: List[float]  # [|rate_i|]
+
+
+def diagnose(
+    rates: List[float],
+    signs: List[int],
+    gains: List[float],
+    tol: float,
+    stuck_floor_tps: float = 30.0,
+    stuck_frac: float = 0.3,
+) -> Diagnosis:
+    """forward 구간 4모터 tick rate/부호/게인으로 직진 캘리브 상태를 진단.
+
+    rclpy 비의존 순수 함수(오프라인 테스트용).
+
+    규칙:
+      - r = [|rate_i|], max_r/min_r/mean_r (mean guard>0)
+      - imbalance = (max_r - min_r) / mean_r,  converged = imbalance < tol
+      - STUCK m{i}: r_i < max(stuck_floor_tps, stuck_frac*max_r)
+      - SIGN_FLIP m{i}: forward 다수 부호와 반대(0 은 STUCK 로 처리)
+      - verdict 우선순위: FAIL_STUCK > FAIL_SIGN > (converged? PASS : NOT_CONVERGED)
+    """
+    n = len(rates)
+    abs_rates = [abs(float(r)) for r in rates]
+    max_r = max(abs_rates) if abs_rates else 0.0
+    min_r = min(abs_rates) if abs_rates else 0.0
+    mean_r = statistics.mean(abs_rates) if abs_rates else 0.0
+    imbalance = (max_r - min_r) / mean_r if mean_r > 1e-9 else 0.0
+    converged = imbalance < tol
+    min_index = abs_rates.index(min_r) if abs_rates else 0
+
+    flags: List[str] = []
+
+    # STUCK: 거의 안 도는 모터
+    stuck_thr = max(stuck_floor_tps, stuck_frac * max_r)
+    stuck = [i for i in range(n) if abs_rates[i] < stuck_thr]
+    for i in stuck:
+        flags.append(f"STUCK m{i + 1}")
+
+    # SIGN_FLIP: 다수 부호와 반대인 모터(부호 0=STUCK 는 제외)
+    pos = sum(1 for s in signs if s > 0)
+    neg = sum(1 for s in signs if s < 0)
+    majority = 1 if pos >= neg else -1
+    sign_flip = [i for i in range(n) if signs[i] != 0 and signs[i] != majority]
+    for i in sign_flip:
+        flags.append(f"SIGN_FLIP m{i + 1}")
+
+    # verdict 우선순위
+    if stuck:
+        verdict = "FAIL_STUCK"
+    elif sign_flip:
+        verdict = "FAIL_SIGN"
+    elif converged:
+        verdict = "PASS"
+    else:
+        verdict = "NOT_CONVERGED"
+
+    if verdict == "FAIL_SIGN":
+        motors = "/".join(str(i + 1) for i in sign_flip)
+        recommendation = RECOMMEND["FAIL_SIGN"].replace("{X}", motors)
+    else:
+        recommendation = RECOMMEND[verdict]
+
+    return Diagnosis(
+        verdict=verdict,
+        imbalance=imbalance,
+        flags=flags,
+        recommendation=recommendation,
+        min_index=min_index,
+        abs_rates=abs_rates,
+    )
 
 
 @dataclass
@@ -103,6 +208,17 @@ class TriboCalibrator(Node):
         self.declare_parameter("current_gain_m4", 1.0)
         self.declare_parameter("current_gain_left_rev_factor", 1.0)
         self.declare_parameter("current_gain_right_rev_factor", 1.0)
+
+        # ---- convergence / write-back (방식 A: 측정→기록→재시작 반복) ----
+        self.declare_parameter("write_yaml", False)
+        self.declare_parameter("calib_yaml_path", DEFAULT_CALIB_YAML)
+        self.declare_parameter("converge_tol", 0.05)
+        self.declare_parameter("bringup_node_name", "tribo_bringup")
+
+        self.write_yaml = bool(self.get_parameter("write_yaml").value)
+        self.calib_yaml_path = str(self.get_parameter("calib_yaml_path").value)
+        self.converge_tol = float(self.get_parameter("converge_tol").value)
+        self.bringup_node_name = str(self.get_parameter("bringup_node_name").value)
 
         self.cmd_topic = str(self.get_parameter("cmd_topic").value)
         self.encoder_topic = str(self.get_parameter("encoder_topic").value)
@@ -175,9 +291,61 @@ class TriboCalibrator(Node):
             f"Will publish on {self.cmd_topic} and read {self.encoder_topic}, {self.odom_topic}."
         )
 
+        # Live gain baseline: query the RUNNING bringup node so every re-calibration
+        # pass corrects relative to the gains actually applied right now (방식 A의
+        # 재시작 반복에서 항상 현재값 기준). Falls back to the current_gain_m* params
+        # if the service is unavailable. Done BEFORE timers start so the motion
+        # state machine does not advance during the blocking service call.
+        self.live_gain = self._fetch_live_gains()
+
         # timers
         self._pub_timer = self.create_timer(1.0 / self.pub_rate, self._tick_publish)
         self._seq_timer = self.create_timer(0.05, self._tick_sequence)  # state machine
+
+    def _fetch_live_gains(self) -> List[float]:
+        """실행 중인 bringup 노드의 gain_m1~m4 를 파라미터 서비스로 조회.
+
+        성공 시 [m1,m2,m3,m4] float 리스트, 실패 시 current_gain_m* 폴백값.
+        """
+        names = ["gain_m1", "gain_m2", "gain_m3", "gain_m4"]
+        try:
+            # rclpy Jazzy: 클래스명은 AsyncParameterClient (단수). import 실패 시에도
+            # 아래 except 로 폴백되도록 try 안에서 import 한다.
+            from rclpy.parameter_client import AsyncParameterClient
+
+            client = AsyncParameterClient(self, self.bringup_node_name)
+            if not client.wait_for_services(timeout_sec=5.0):
+                self.get_logger().warning(
+                    f"[live-gain] '{self.bringup_node_name}' 파라미터 서비스 없음 "
+                    f"-> current_gain_m* 폴백 {['%.3f' % g for g in self.cur_gain]}"
+                )
+                return self.cur_gain[:]
+            future = client.get_parameters(names)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            if not future.done() or future.result() is None:
+                self.get_logger().warning(
+                    "[live-gain] 조회 타임아웃 -> current_gain_m* 폴백 "
+                    f"{['%.3f' % g for g in self.cur_gain]}"
+                )
+                return self.cur_gain[:]
+            vals = future.result().values  # rcl_interfaces/ParameterValue[]
+            gains = [float(v.double_value) for v in vals]
+            if len(gains) != 4 or any(g == 0.0 for g in gains):
+                self.get_logger().warning(
+                    f"[live-gain] 유효하지 않은 응답 {gains} -> current_gain_m* 폴백"
+                )
+                return self.cur_gain[:]
+            self.get_logger().info(
+                f"[live-gain] running bringup gains = "
+                f"m1={gains[0]:.3f} m2={gains[1]:.3f} m3={gains[2]:.3f} m4={gains[3]:.3f}"
+            )
+            return gains
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().warning(
+                f"[live-gain] 조회 실패({e}) -> current_gain_m* 폴백 "
+                f"{['%.3f' % g for g in self.cur_gain]}"
+            )
+            return self.cur_gain[:]
 
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
@@ -325,6 +493,69 @@ class TriboCalibrator(Node):
             return default
         return a / b
 
+    def _write_calib_yaml(self, gains: List[float]):
+        """계산된 gain_m1~m4 를 calib_yaml_path 에 원자적으로 병합 기록.
+
+        - 기존 파일의 다른 키(tribo_bringup/ros__parameters 하위 포함)는 보존.
+        - gain_m1~4 만 갱신. 파일이 없으면 새로 생성.
+        - 임시파일에 쓰고 os.replace 로 원자적 교체.
+        """
+        path = self.calib_yaml_path
+        data: Dict = {}
+        try:
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    loaded = yaml.safe_load(f)
+                if isinstance(loaded, dict):
+                    data = loaded
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().warning(
+                f"[write_yaml] 기존 파일 읽기 실패({e}), 새로 생성합니다."
+            )
+            data = {}
+
+        node = data.get("tribo_bringup")
+        if not isinstance(node, dict):
+            node = {}
+            data["tribo_bringup"] = node
+        params = node.get("ros__parameters")
+        if not isinstance(params, dict):
+            params = {}
+            node["ros__parameters"] = params
+
+        params["gain_m1"] = round(float(gains[0]), 4)
+        params["gain_m2"] = round(float(gains[1]), 4)
+        params["gain_m3"] = round(float(gains[2]), 4)
+        params["gain_m4"] = round(float(gains[3]), 4)
+
+        header = (
+            "# AUTO-GENERATED by motor_calib.py — per-robot, DO NOT COMMIT\n"
+            "# gain_m1~m4: 모터별 PWM 배수. bringup.launch.py 가 bringup.yaml 뒤에\n"
+            "# 로드하여 오버라이드. 재생성: scripts/motor_calib_converge.sh (바퀴 들고).\n"
+        )
+        try:
+            d = os.path.dirname(path) or "."
+            os.makedirs(d, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=".motor_calib.", suffix=".yaml", dir=d)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(header)
+                    yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
+                os.replace(tmp, path)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+            self.get_logger().info(
+                f"[write_yaml] gain 기록됨 -> {path} : "
+                f"m1={params['gain_m1']} m2={params['gain_m2']} "
+                f"m3={params['gain_m3']} m4={params['gain_m4']}"
+            )
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().error(f"[write_yaml] 파일 기록 실패: {e}")
+
     def _print_summary_and_exit(self):
         fwd = self._find("forward")
         back = self._find("backward")
@@ -352,35 +583,80 @@ class TriboCalibrator(Node):
         # ---- Recommendations ----
         self.get_logger().info("---------- RECOMMENDATIONS ----------")
 
-        # 1) Straight balance (forward) -> per-side gain suggestion
+        # 1) Straight balance (forward) -> per-motor gain (방식 A)
         if fwd is not None:
-            # We want left_rate ~= right_rate in forward
-            # If right is slower: multiply right gains by (left/right)
-            corr_right = self._safe_ratio(abs(fwd.left_rate), abs(fwd.right_rate), 1.0)
-            # If right is faster, corr_right < 1; alternatively scale left.
-            corr_left = self._safe_ratio(abs(fwd.right_rate), abs(fwd.left_rate), 1.0)
+            # ---- Forward per-motor gain (방식 A) ----
+            # 목표: 4모터 tick rate 를 그중 '최저' 모터에 맞춤. 게인이 항상 현재값
+            # 이하로만 내려가므로 PWM 포화가 없어 안전.
+            #   new_gain[i] = live_gain[i] * (min_rate / |rate_i|)
+            # live_gain 은 실행 중 bringup 에서 조회한 현재 적용 게인(폴백=current_*).
+            abs_rates = [abs(r) for r in fwd.rates]
+            eps = 1e-6
+            min_rate = min(abs_rates)
+            max_rate = max(abs_rates)
+            mean_rate = statistics.mean(abs_rates) if abs_rates else 0.0
 
-            # Also per-wheel within side
-            # For left: match m1 and m2
-            l1, l2 = abs(fwd.rates[0]), abs(fwd.rates[1])
-            r3, r4 = abs(fwd.rates[2]), abs(fwd.rates[3])
-            corr_m2 = self._safe_ratio(l1, l2, 1.0)  # multiply m2 to match m1
-            corr_m4 = self._safe_ratio(r3, r4, 1.0)  # multiply m4 to match m3
+            new_gain = self.live_gain[:]
+            if min_rate < eps or any(r < eps for r in abs_rates):
+                gain_ok = False
+                self.get_logger().warning(
+                    "[직진] 어떤 모터 tick rate 가 0 에 가깝습니다. gain 재계산을 건너뜁니다 "
+                    "(pwm_min_percent/기계저항 확인). 현재 게인을 유지합니다."
+                )
+            else:
+                gain_ok = True
+                new_gain = [
+                    self.live_gain[i] * (min_rate / abs_rates[i]) for i in range(4)
+                ]
 
-            # Compose: side correction + within-side correction
-            # Keep m1,m3 as references, adjust m2,m4 for within-side, then adjust right side overall.
-            new_gain = self.cur_gain[:]
-            new_gain[1] *= corr_m2
-            new_gain[3] *= corr_m4
-            new_gain[2] *= corr_right
-            new_gain[3] *= corr_right
+            # 불균형 지표: (max-min)/mean (0=완전 균형). converge_tol 미만이면 수렴.
+            imbalance = (max_rate - min_rate) / mean_rate if mean_rate > eps else 0.0
 
             self.get_logger().info(
-                f"[직진 보정(Forward)] L={fwd.left_rate:.1f}, R={fwd.right_rate:.1f} ticks/s\n"
-                f"  - 오른쪽이 느리면 corr_right>1 로 보정됩니다. corr_right={corr_right:.3f}\n"
+                f"[직진 보정(Forward)] rates(t/s)={['%.1f' % r for r in fwd.rates]} "
+                f"L={fwd.left_rate:.1f} R={fwd.right_rate:.1f}\n"
+                f"  - live_gain={['%.3f' % g for g in self.live_gain]}\n"
                 f"  - 추천 gain_m*: "
-                f"m1={new_gain[0]:.3f}, m2={new_gain[1]:.3f}, m3={new_gain[2]:.3f}, m4={new_gain[3]:.3f}"
+                f"m1={new_gain[0]:.3f}, m2={new_gain[1]:.3f}, "
+                f"m3={new_gain[2]:.3f}, m4={new_gain[3]:.3f}"
             )
+
+            # 수렴 판정 한 줄 (오케스트레이션 스크립트가 grep). 주의: NOT_CONVERGED 는
+            # CONVERGED 를 부분문자열로 포함하므로 스크립트는 NOT_CONVERGED 를 먼저 검사.
+            if imbalance < self.converge_tol:
+                self.get_logger().info(f"CONVERGED imbalance={imbalance:.4f}")
+            else:
+                self.get_logger().info(f"NOT_CONVERGED imbalance={imbalance:.4f}")
+
+            # ---- 진단(자동): 순수 함수로 판정 → per-run 리포트 ----
+            diag = diagnose(fwd.rates, fwd.signs, self.live_gain, self.converge_tol)
+            k = diag.min_index + 1
+            block = [
+                "========== 진단(자동) ==========",
+                f"판정: {diag.verdict}  imbalance={diag.imbalance:.4f} "
+                f"(tol={self.converge_tol:.4f})",
+                f"rate(ticks/s): m1={fwd.rates[0]:.1f} m2={fwd.rates[1]:.1f} "
+                f"m3={fwd.rates[2]:.1f} m4={fwd.rates[3]:.1f}  (기준=최저 m{k})",
+            ]
+            if diag.flags:
+                block.append(f"[경고] {', '.join(diag.flags)}")
+            block.append(
+                f"갱신 gain: m1={new_gain[0]:.3f} m2={new_gain[1]:.3f} "
+                f"m3={new_gain[2]:.3f} m4={new_gain[3]:.3f}"
+            )
+            block.append(f"권장: {diag.recommendation}")
+            # 스크립트 파싱용 머신 판정 라인
+            block.append(f"VERDICT: {diag.verdict}")
+            self.get_logger().info("\n".join(block))
+
+            # write-back: 소스 config/motor_calib.yaml 에 gain 병합 기록
+            if self.write_yaml:
+                if gain_ok:
+                    self._write_calib_yaml(new_gain)
+                else:
+                    self.get_logger().warning(
+                        "[write_yaml] gain 재계산 불가로 파일을 갱신하지 않았습니다."
+                    )
 
             # Sign sanity for forward
             if any(s == 0 for s in fwd.signs):
