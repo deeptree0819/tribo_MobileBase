@@ -127,7 +127,16 @@ ssh <robot-user>@<robot-ip>
 
 ## 4. 설치
 
-### 4-1. 시스템 의존성
+> **📍 대상: PC와 로봇 양쪽에서 각각 수행합니다.** 두 머신 모두 자기 `~/tribo_ws`를 갖고 빌드합니다 — 로봇은 실제 bringup·주행용, PC는 시뮬레이션·RViz·개발용. (하드웨어 설정인 5장만 **로봇 전용**입니다.)
+>
+> | 소절 | PC | 로봇 | 비고 |
+> |------|:--:|:----:|------|
+> | 4-1 시스템 의존성 | ✅ | ✅ | `python3-serial`은 실제로는 로봇에서만 쓰이나, 설치해 둬도 무해 |
+> | 4-2 ROS 2 패키지 의존성 | ✅ | ✅ | 시뮬(gazebo) 블록은 **PC만** |
+> | 4-3 워크스페이스 clone | ✅ | ✅ | 각 머신에 독립적으로 clone |
+> | 4-4 빌드 | ✅ | ✅ | 각 머신에서 `colcon build` |
+
+### 4-1. 시스템 의존성 &nbsp;·&nbsp; 🖥️ PC + 🤖 로봇
 
 ```bash
 sudo apt update
@@ -138,8 +147,10 @@ sudo apt install -y \
 ```
 
 > `python3-serial`(pyserial)은 `tribolib.py`가 보드와 통신하는 데 **유일하게 필요한 외부 파이썬 의존성**입니다. (Yahboom의 `Rosmaster_Lib`는 따로 설치할 필요 없음 — `tribolib.py`가 프로토콜을 자체 구현)
+>
+> `python3-colcon-common-extensions`가 `Unable to locate package`로 안 잡히면 **ROS 2 apt 저장소가 아직 추가되지 않은 것**입니다(이 패키지는 packages.ros.org에 있음). 2장의 ROS 2 Jazzy 설치를 먼저 끝내면 잡힙니다.
 
-### 4-2. ROS 2 패키지 의존성
+### 4-2. ROS 2 패키지 의존성 &nbsp;·&nbsp; 🖥️ PC + 🤖 로봇
 
 ```bash
 sudo apt install -y \
@@ -157,7 +168,7 @@ sudo apt install -y \
   ros-jazzy-slam-toolbox
 ```
 
-시뮬레이션(`tribo_gazebo`)도 쓸 경우:
+시뮬레이션(`tribo_gazebo`)도 쓸 경우 &nbsp;·&nbsp; **🖥️ PC 전용** (로봇에선 불필요):
 
 ```bash
 sudo apt install -y \
@@ -166,7 +177,7 @@ sudo apt install -y \
   ros-jazzy-ros-gz-image
 ```
 
-### 4-3. 워크스페이스 클론 (서브모듈 포함)
+### 4-3. 워크스페이스 클론 (서브모듈 포함) &nbsp;·&nbsp; 🖥️ PC + 🤖 로봇 (각각)
 
 `sllidar_ros2`는 서브모듈이므로 `--recurse-submodules`가 필수입니다.
 
@@ -180,7 +191,7 @@ cd ~/tribo_ws/src/tribo
 git submodule update --init --recursive
 ```
 
-### 4-4. 빌드
+### 4-4. 빌드 &nbsp;·&nbsp; 🖥️ PC + 🤖 로봇 (각각)
 
 ```bash
 cd ~/tribo_ws
@@ -191,7 +202,7 @@ source install/setup.bash
 
 ---
 
-## 5. 하드웨어 설정
+## 5. 하드웨어 설정 &nbsp;·&nbsp; 🤖 로봇 전용
 
 ### 5-1. 시리얼 포트 접근 권한
 
