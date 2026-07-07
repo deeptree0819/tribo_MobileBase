@@ -96,6 +96,33 @@ ssh <robot-user>@<robot-ip> 'echo OK'
 
 > 편의를 위해 PC `~/.bashrc`에 alias를 둘 수 있습니다: `alias tribo="ssh tribo@192.168.210.16"`. 로봇이 바뀌면 이 한 줄의 `user@ip`만 갱신하세요.
 
+### 3-5. 호스트키 변경 경고 — 같은 IP에 새 로봇을 올렸을 때 (PC에서)
+
+기존 로봇과 **같은 IP를 재사용하는 새 로봇**(재설치/보드 교체 포함)에 접속하면, 새 OS가 새 호스트키를 갖고 있어 PC가 이렇게 막습니다.
+
+```
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+...
+Offending ED25519 key in /home/<user>/.ssh/known_hosts:41
+Host key verification failed.
+```
+
+이건 MITM 공격이 아니라 **로봇이 바뀌었으니 당연한 경고**입니다(PC의 `known_hosts`에 옛 로봇의 키가 남아 있는 것). 해당 IP의 옛 키만 지우면 됩니다.
+
+```bash
+# PC에서 — 옛 호스트키 제거 (백업은 known_hosts.old 로 자동 보관됨)
+ssh-keygen -f ~/.ssh/known_hosts -R <robot-ip>      # 예: -R 192.168.210.14
+
+# 다시 접속하면 새 키 등록 여부를 물어봄 → yes
+ssh <robot-user>@<robot-ip>
+# The authenticity of host ... can't be established.
+# Are you sure you want to continue connecting (yes/no/[fingerprint])?  → yes
+```
+
+> 접속이 뜨면 로봇에서 `whoami`/`hostname`으로 **계정·호스트명이 맞는 로봇인지** 한 번 확인하세요(옛 로봇과 IP만 같고 실제로 다른 장비일 수 있음). 이후 `ssh-copy-id`(3-4)로 공개키를 다시 등록하면 비밀번호 없이 접속됩니다.
+
 ---
 
 ## 4. 설치
@@ -514,7 +541,8 @@ ros2 run tribo_odom rotation_calib --ros-args \
 
 | 증상 | 확인 |
 |------|------|
-| SSH 접속 `Connection refused` | 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3장) |
+| SSH 접속 `Connection refused` | 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3-2) |
+| SSH `REMOTE HOST IDENTIFICATION HAS CHANGED` / `Host key verification failed` | 같은 IP에 새 로봇을 올린 경우. PC에서 `ssh-keygen -R <robot-ip>`로 옛 호스트키 제거 후 재접속 (3-5) |
 | `could not open port ...` | `dialout` 그룹 추가 후 재로그인 했는지(5-1), 보드가 연결됐는지 |
 | `ModuleNotFoundError: serial` | `sudo apt install python3-serial` |
 | PC에서 publish해도 로봇이 안 움직임 | PC·로봇 `ROS_DOMAIN_ID` 일치 여부 |
