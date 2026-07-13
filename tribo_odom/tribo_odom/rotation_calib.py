@@ -29,7 +29,7 @@ import rclpy
 from rclpy.node import Node
 
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import BatteryState, Imu
 from geometry_msgs.msg import Twist
 
 
@@ -75,6 +75,10 @@ class RotationCalib(Node):
         if self.use_ekf:
             self.create_subscription(Odometry, str(g("ekf_topic").value),
                                      lambda m: self.ekf.append((time.monotonic(), m.twist.twist.angular.z)), 50)
+        # 전압이 낮으면 토크가 모자라 스크럽을 못 이기고 바퀴만 헛돈다 → 측정 전체가 무효가 된다.
+        self.batt_v = float("nan")
+        self.create_subscription(BatteryState, "battery",
+                                 lambda m: setattr(self, "batt_v", float(m.voltage)), 10)
 
         # ---------- state ----------
         self.raw, self.imu, self.ekf = [], [], []
@@ -124,6 +128,7 @@ class RotationCalib(Node):
                         "(bringup 실행 중인지 확인)")
                     self.t_state = now  # 계속 대기
                     return
+                self._check_battery()
                 self._begin_spin(now)
             return
 
@@ -141,6 +146,18 @@ class RotationCalib(Node):
                 else:
                     self._begin_spin(now)
             return
+
+    def _check_battery(self):
+        """전압이 낮으면 결과를 못 믿는다. 측정 전에 한 번, 리포트에서 다시 경고한다."""
+        if math.isnan(self.batt_v):
+            self.get_logger().warn(
+                "배터리 전압을 못 읽었다(/battery 없음). 전압이 낮으면 슬립이 폭주해 결과가 무효가 된다.")
+        elif self.batt_v < self.BATT_MIN_V:
+            self.get_logger().warn(
+                f"⚠ 배터리 {self.batt_v:.1f}V < {self.BATT_MIN_V:.1f}V — 토크 부족으로 바퀴가 헛돈다. "
+                "이 상태의 측정값은 신뢰할 수 없다. 충전 후 다시 측정할 것.")
+        else:
+            self.get_logger().info(f"배터리 {self.batt_v:.1f}V — 측정 가능.")
 
     def _begin_spin(self, now):
         self.spin_idx += 1
@@ -188,10 +205,15 @@ class RotationCalib(Node):
         s = (sum((x - m) ** 2 for x in a) / len(a)) ** 0.5
         return m, s
 
-    # 방향 비대칭이 이보다 크면 "슬립 변동"이 아니라 계통 오차로 본다.
+    # 제어 비대칭(CW/CCW 회전량 차). 모터/기구 문제이며 odom 스케일과는 별개다.
     ASYM_WARN = 5.0     # %
+    # track_true 의 방향간 편차. track_width 는 이 값 하나로 정하므로,
+    # "단일 track 이 성립하는가" 는 IMU 각 비대칭이 아니라 이걸로 판정해야 한다.
+    TRACK_SPREAD_WARN = 5.0     # %
     # 명령 대비 실제 회전이 이 아래면 개루프 PWM 매핑이 명령을 못 따라가는 것.
     CMD_TRACK_WARN = 0.85
+    # 배터리가 낮으면 토크 부족으로 스크럽을 못 이겨 슬립이 폭주한다 → 측정 자체가 무효.
+    BATT_MIN_V = 11.0
 
     def _report(self):
         L = self.get_logger().info
@@ -214,7 +236,8 @@ class RotationCalib(Node):
         # ---- 방향별로 갈라 본다 (평균만 보면 계통 비대칭이 노이즈로 위장된다) ----
         ccw = [r for r in self.rows if r[6] > 0]
         cw = [r for r in self.rows if r[6] < 0]
-        asym = float("nan")
+        asym = float("nan")       # 제어 비대칭 (CW/CCW 회전량 차)
+        spread = float("nan")     # odom 비대칭 (CW/CCW track_true 차)
         if ccw and cw:
             m_ccw, _ = self._mean_std([r[0] for r in ccw])   # IMU 각
             m_cw, _ = self._mean_std([r[0] for r in cw])
@@ -222,9 +245,11 @@ class RotationCalib(Node):
             t_cw, _ = self._mean_std([r[5] for r in cw])
             base = 0.5 * (m_ccw + m_cw)
             asym = 100.0 * abs(m_ccw - m_cw) / base if base > 1e-6 else float("nan")
+            tbase = 0.5 * (t_ccw + t_cw)
+            spread = 100.0 * abs(t_ccw - t_cw) / tbase if tbase > 1e-6 else float("nan")
             L("-------------------------------------------")
-            L(f" 방향별 IMU  : CW={m_cw:.1f}deg  CCW={m_ccw:.1f}deg  → 비대칭 {asym:.1f}%")
-            L(f" 방향별 track: CW={t_cw:.3f} m  CCW={t_ccw:.3f} m")
+            L(f" 방향별 IMU  : CW={m_cw:.1f}deg  CCW={m_ccw:.1f}deg  → 제어 비대칭 {asym:.1f}%")
+            L(f" 방향별 track: CW={t_cw:.3f} m  CCW={t_ccw:.3f} m  → odom 편차 {spread:.1f}%")
 
         # ---- 명령 대비 실제 (개루프 PWM은 cmd_vel 대로 안 돈다) ----
         mc, _ = self._mean_std([r[7] for r in self.rows])
@@ -235,24 +260,40 @@ class RotationCalib(Node):
         L(f" EKF/IMU   : 평균={me:.3f} 표준편차={se:.3f}")
         L(f" track_true: 평균={mt:.3f} m (현재 {self.cur_track}, 물리 {self.phys_track})")
         L(f" 실제/명령 : 평균={mc:.2f}  (명령 {cmd_deg:.0f}deg 당 실제 {mc*cmd_deg:.0f}deg)")
+        L(f" 배터리    : {self.batt_v:.1f} V")
         L("-------------------------------------------")
 
+        # 전압이 낮으면 아래 판단 전부가 무의미하므로 가장 먼저 못박는다.
+        if not math.isnan(self.batt_v) and self.batt_v < self.BATT_MIN_V:
+            W(f" ⚠ 배터리 {self.batt_v:.1f}V < {self.BATT_MIN_V:.1f}V — 이 측정은 무효다.")
+            W("   토크가 모자라 바퀴가 헛돌아 슬립이 폭주한다. 아래 수치를 근거로 설정을 바꾸지 말 것.")
+            W("   충전(12V대) 후 재측정할 것.")
+
         # ---- 판단 ----
-        # 방향 비대칭이 크면 track 하나로 못 맞춘다. 이걸 먼저 걸러야 아래 권장이 의미를 가진다.
-        if not math.isnan(asym) and asym > self.ASYM_WARN:
-            W(f" 방향 비대칭 {asym:.1f}% (>{self.ASYM_WARN:.0f}%) → CW/CCW 가 계통적으로 다르다.")
-            W("   단일 track 으로는 양방향을 동시에 못 맞춘다. track 조정 전에 먼저 확인할 것:")
+        # track_width 권장은 "단일 track 이 성립하는가" 로만 막는다.
+        # 그 판정 기준은 odom 편차(track_true 의 방향간 차)이지, 제어 비대칭(IMU 각 차)이 아니다.
+        # 로봇이 한쪽으로 더 빨리 돌아도(제어 비대칭) 휠 odom 스케일은 일정할 수 있고,
+        # 그 경우 단일 track 은 여전히 유효하다. 둘을 섞으면 멀쩡한 권장을 막는다.
+        if not math.isnan(spread) and spread > self.TRACK_SPREAD_WARN:
+            W(f" odom 편차 {spread:.1f}% (>{self.TRACK_SPREAD_WARN:.0f}%) → 방향에 따라 휠 odom 스케일이 다르다.")
+            W("   단일 track 으로는 양방향을 동시에 못 맞춘다. track 조정은 보류하고 먼저 확인할 것:")
+            W("     - 배터리 전압 (낮으면 슬립 폭주 → 측정 무효)")
             W("     - 모터 게인이 이 기체 것인가 (config/motor_calib.yaml, README 8-2)")
-            W("     - 정/역방향 비대칭 보정 (bringup.yaml gain_left_rev_factor / gain_right_rev_factor)")
-            W("     - IMU 자이로 z 바이어스 (정지 상태에서 /imu/data 의 angular_velocity.z 확인)")
         elif not math.isnan(mr):
             if math.isnan(cv) or cv > 15.0:
                 L(" 판단: 슬립 변동이 큼(변동>15%) → 고정 track 으로는 한계.")
                 L("       권장: EKF 가 회전을 IMU 자이로로 추정하도록 설정")
                 L("       ekf.yaml: odom0 yaw/vyaw=false, imu0 vyaw=true")
             else:
-                L(f" 판단: 슬립 비교적 안정 → 유효 track 을 {mt:.3f} m 로 설정 권장")
+                L(f" 판단: 슬립 안정 + odom 편차 작음 → 유효 track 을 {mt:.3f} m 로 설정 권장")
                 L("       (bringup.launch.py _odom_common_params track_width)")
+
+        # 제어 비대칭은 track 과 무관한 별개 문제 — 막지 말고 따로 보고한다.
+        if not math.isnan(asym) and asym > self.ASYM_WARN:
+            W(f" 제어 비대칭 {asym:.1f}% (>{self.ASYM_WARN:.0f}%) → 로봇이 한쪽으로 더 많이 돈다.")
+            W("   odom 이 아니라 모터/기구 문제다 (track 으로는 못 고친다). 확인할 것:")
+            W("     - 정/역방향 비대칭 보정 (bringup.yaml gain_left_rev_factor / gain_right_rev_factor)")
+            W("     - IMU 자이로 z 바이어스 (정지 상태에서 /imu/data 의 angular_velocity.z 확인)")
 
         if not math.isnan(mc) and mc < self.CMD_TRACK_WARN:
             W(f" 실제/명령={mc:.2f} → 로봇이 명령한 각속도의 {mc*100:.0f}% 만 돈다.")

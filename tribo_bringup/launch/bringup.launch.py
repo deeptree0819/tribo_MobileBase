@@ -296,8 +296,11 @@ def generate_launch_description():
         # robot_geom.yaml. 4-wheel skid-steer slips laterally on turns, so effective
         # track > physical 0.70 m. With EKF on, /odom yaw comes from the IMU gyro
         # (ekf.yaml), so this mainly affects /odom_raw and the use_ekf=false legacy path.
-        # Calibrated via `ros2 run tribo_odom rotation_calib` (IMU gyro ref, 2026-06-11).
-        "track_width": 0.873,
+        # Calibrated via `ros2 run tribo_odom rotation_calib` (IMU gyro ref).
+        # 2026-07-13: 0.873 -> 0.838 (tribo v2, motor_calib.yaml 적용 후 12V에서 2회 재현).
+        # 측정은 배터리 11V 이상에서만 유효하다 — 전압이 낮으면 토크 부족으로 바퀴가
+        # 헛돌아 track_true 가 3 m 대까지 튄다 (10.5V 측정 실패 사례).
+        "track_width": 0.838,
     }
 
     # EKF 사용 시: odom_publisher → /odom_raw (TF 끔). EKF가 /odom + TF 담당.
