@@ -77,7 +77,7 @@ nc -vz <robot-ip> 22           # 이제 succeeded!
 ssh <robot-user>@<robot-ip>    # 예: ssh tribo@192.168.210.20
 ```
 
-> 로봇마다 **계정명이 다를 수 있습니다.** 라즈베리파이에서 `whoami`로 확인하세요. `tribossh` 같은 alias를 쓴다면 `type tribossh`로 가리키는 `user@host`가 해당 로봇과 맞는지 점검하세요(IP만 바꾸고 옛 계정을 가리키면 인증 단계에서 실패).
+> 로봇마다 **계정명이 다를 수 있습니다.** 라즈베리파이에서 `whoami`로 확인하세요. `tribo` 같은 접속 alias를 쓴다면 `type tribo`로 실제 가리키는 대상이 해당 로봇과 맞는지 점검하세요(IP만 바꾸고 옛 계정을 가리키면 인증 단계에서 실패).
 >
 > 여기까지는 IP로 접속하지만, 키 등록(3-4) 후에는 **3-4-1처럼 호스트명 별칭(`tribo-robot`)으로 고정**하는 것을 권장합니다. 이 문서의 이후 예시는 모두 그 별칭을 씁니다.
 
@@ -98,7 +98,7 @@ ssh <robot-user>@<robot-ip> 'echo OK'
 
 ### 3-4-1. IP 대신 호스트명으로 고정하기 (권장)
 
-로봇 IP는 **DHCP로 재부팅·재접속 때마다 바뀔 수 있습니다.** 실제로 이 프로젝트에서도 `.14` → `.16` → `.20` 으로 두 번 바뀌었고, 그때마다 IP를 하드코딩해 둔 스크립트·문서·alias가 전부 깨졌습니다. 더 나쁜 건, 비워진 옛 IP를 **다른 기기가 가져가면** 접속 시 `timed out`이 아니라 `Connection refused`가 떠서 "로봇이 꺼졌다"고 오진하기 쉽다는 점입니다.
+로봇 IP는 **DHCP로 재부팅·재접속·기체 교체 때마다 바뀔 수 있습니다.** 실제로 이 프로젝트에서도 `.14` → `.16` → `.20` → `.23` 으로 세 번 바뀌었고, 그때마다 IP를 하드코딩해 둔 스크립트·문서·alias가 전부 깨졌습니다. 더 나쁜 건, 비워진 옛 IP를 **다른 기기가 가져가면** 접속 시 `timed out`이 아니라 `Connection refused`가 떠서 "로봇이 꺼졌다"고 오진하기 쉽다는 점입니다.
 
 그래서 IP는 어디에도 적지 말고, **`~/.ssh/config` 한 곳에서 호스트명으로** 관리합니다. 라즈베리파이/우분투는 mDNS(avahi)가 기본 동작하므로 `<hostname>.local` 이 같은 네트워크에서 자동으로 해석됩니다.
 
@@ -117,17 +117,40 @@ getent hosts tribo-robot.local   # 현재 IP 확인용
 ssh tribo-robot 'hostname'       # → tribo-robot
 ```
 
-이제 IP가 바뀌어도 **고칠 곳이 없습니다.** 이후 모든 명령·스크립트는 `user@ip` 대신 `tribo-robot` 별칭만 씁니다. PC `~/.bashrc`에 alias를 두면 더 짧아집니다:
-
-```bash
-alias tribo="ssh tribo-robot"    # IP는 ~/.ssh/config 의 tribo-robot 한 곳에서만 관리
-```
+이제 IP가 바뀌어도 **고칠 곳이 없습니다.** 이후 모든 명령·스크립트는 `user@ip` 대신 `tribo-robot` 별칭만 씁니다(아래 3-4-2).
 
 > 접속이 안 되면 `getent hosts tribo-robot.local`로 현재 IP부터 확인하세요. 아무것도 안 나오면 로봇이 꺼져 있거나 다른 공유기(AP)에 붙은 것입니다. mDNS가 막힌 네트워크라면 `HostName`에 IP를 직접 적되, **그 한 줄만** 갱신하면 되도록 나머지는 별칭을 유지하세요.
+>
+> **기체를 교체했다면**(예: tribo v1 → v2) 호스트명이 같아도 SSH 호스트키는 다르므로 `REMOTE HOST IDENTIFICATION HAS CHANGED` 경고가 뜹니다. 정상이며, 3-5의 절차로 옛 키를 지우고 재접속하면 됩니다.
 
-### 3-5. 호스트키 변경 경고 — 같은 IP에 새 로봇을 올렸을 때 (PC에서)
+### 3-4-2. 자주 쓰는 alias 모음 (선택)
 
-기존 로봇과 **같은 IP를 재사용하는 새 로봇**(재설치/보드 교체 포함)에 접속하면, 새 OS가 새 호스트키를 갖고 있어 PC가 이렇게 막습니다.
+작업 편의를 위해 `~/.bashrc`에 아래를 둘 수 있습니다. 실제로 쓰고 있는 구성입니다.
+
+```bash
+# PC + 로봇 공통 — 워크스페이스 활성화
+alias tribo_ws="source ~/tribo_ws/install/local_setup.bash; echo \"tribo_ws is activated\""
+
+# PC — 로봇 접속 (IP는 ~/.ssh/config 의 tribo-robot 한 곳에서만 관리)
+alias tribo="ssh tribo-robot"       # 접속은 이걸로: $ tribo
+
+# PC — 실행 중인 launch 정리 (Ctrl+C로 안 죽은 노드가 남을 때)
+alias kbringup='pkill -f "ros2 launch tribo_bringup"'
+alias knav='pkill -f "ros2 launch tribo_navigation"'
+alias kall='pkill -f "ros2 launch tribo"'      # bringup + navigation 전부
+```
+
+수정 후 `source ~/.bashrc` 로 반영합니다.
+
+> **이름이 둘인 이유** — 헷갈리기 쉬우니 정리하면:
+> - **`tribo`** = PC에서 **사람이 직접 치는** 접속 alias. 터미널에서 `tribo` 한 단어면 로봇에 붙습니다.
+> - **`tribo-robot`** = `~/.ssh/config` 의 **Host 별칭**. bash alias는 대화형 셸에서만 로드되므로 `scp`·스크립트·`ssh <host> '<command>'` 같은 비대화형 호출에는 안 먹습니다. 그런 곳에는 `tribo-robot` 을 쓰세요 (예: `scp map.yaml tribo-robot:~/`).
+>
+> 즉 **PC에서 접속할 땐 `tribo`, 문서·스크립트에 적을 땐 `tribo-robot`** 입니다. IP는 어느 쪽에도 쓰지 않습니다.
+
+### 3-5. 호스트키 변경 경고 — 같은 이름/IP로 다른 로봇에 접속할 때 (PC에서)
+
+**기체를 바꿨거나**(tribo v1 → v2 처럼 hostname이 같은 다른 장비), 기존 로봇과 **같은 IP를 재사용하는 새 로봇**(재설치/보드 교체 포함)에 접속하면, 그 장비는 다른 호스트키를 갖고 있어 PC가 이렇게 막습니다.
 
 ```
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
