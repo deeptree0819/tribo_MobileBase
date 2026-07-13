@@ -74,10 +74,12 @@ sudo systemctl status ssh      # active (running) 확인
 
 ```bash
 nc -vz <robot-ip> 22           # 이제 succeeded!
-ssh <robot-user>@<robot-ip>    # 예: ssh dtrp@192.168.210.14
+ssh <robot-user>@<robot-ip>    # 예: ssh tribo@192.168.210.20
 ```
 
 > 로봇마다 **계정명이 다를 수 있습니다.** 라즈베리파이에서 `whoami`로 확인하세요. `tribossh` 같은 alias를 쓴다면 `type tribossh`로 가리키는 `user@host`가 해당 로봇과 맞는지 점검하세요(IP만 바꾸고 옛 계정을 가리키면 인증 단계에서 실패).
+>
+> 여기까지는 IP로 접속하지만, 키 등록(3-4) 후에는 **3-4-1처럼 호스트명 별칭(`tribo-robot`)으로 고정**하는 것을 권장합니다. 이 문서의 이후 예시는 모두 그 별칭을 씁니다.
 
 ### 3-4. SSH 키 등록 (비밀번호 없이 접속)
 
@@ -88,13 +90,40 @@ ssh <robot-user>@<robot-ip>    # 예: ssh dtrp@192.168.210.14
 ls ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519
 
 # 공개키를 로봇에 등록 — 이때 한 번만 비밀번호 입력
-ssh-copy-id <robot-user>@<robot-ip>      # 예: ssh-copy-id tribo@192.168.210.16
+ssh-copy-id <robot-user>@<robot-ip>      # 예: ssh-copy-id tribo@192.168.210.20
 
 # 확인 — 이제 비밀번호 없이 접속돼야 함
 ssh <robot-user>@<robot-ip> 'echo OK'
 ```
 
-> 편의를 위해 PC `~/.bashrc`에 alias를 둘 수 있습니다: `alias tribo="ssh tribo@192.168.210.16"`. 로봇이 바뀌면 이 한 줄의 `user@ip`만 갱신하세요.
+### 3-4-1. IP 대신 호스트명으로 고정하기 (권장)
+
+로봇 IP는 **DHCP로 재부팅·재접속 때마다 바뀔 수 있습니다.** 실제로 이 프로젝트에서도 `.14` → `.16` → `.20` 으로 두 번 바뀌었고, 그때마다 IP를 하드코딩해 둔 스크립트·문서·alias가 전부 깨졌습니다. 더 나쁜 건, 비워진 옛 IP를 **다른 기기가 가져가면** 접속 시 `timed out`이 아니라 `Connection refused`가 떠서 "로봇이 꺼졌다"고 오진하기 쉽다는 점입니다.
+
+그래서 IP는 어디에도 적지 말고, **`~/.ssh/config` 한 곳에서 호스트명으로** 관리합니다. 라즈베리파이/우분투는 mDNS(avahi)가 기본 동작하므로 `<hostname>.local` 이 같은 네트워크에서 자동으로 해석됩니다.
+
+```bash
+# PC ~/.ssh/config
+Host tribo-robot
+  HostName tribo-robot.local     # 로봇의 hostname + .local (IP를 적지 않는다)
+  User tribo
+  IdentityFile ~/.ssh/id_ed25519
+  StrictHostKeyChecking accept-new
+```
+
+```bash
+# 확인 — 현재 IP가 무엇이든 알아서 찾아감
+getent hosts tribo-robot.local   # 현재 IP 확인용
+ssh tribo-robot 'hostname'       # → tribo-robot
+```
+
+이제 IP가 바뀌어도 **고칠 곳이 없습니다.** 이후 모든 명령·스크립트는 `user@ip` 대신 `tribo-robot` 별칭만 씁니다. PC `~/.bashrc`에 alias를 두면 더 짧아집니다:
+
+```bash
+alias tribo="ssh tribo-robot"    # IP는 ~/.ssh/config 의 tribo-robot 한 곳에서만 관리
+```
+
+> 접속이 안 되면 `getent hosts tribo-robot.local`로 현재 IP부터 확인하세요. 아무것도 안 나오면 로봇이 꺼져 있거나 다른 공유기(AP)에 붙은 것입니다. mDNS가 막힌 네트워크라면 `HostName`에 IP를 직접 적되, **그 한 줄만** 갱신하면 되도록 나머지는 별칭을 유지하세요.
 
 ### 3-5. 호스트키 변경 경고 — 같은 IP에 새 로봇을 올렸을 때 (PC에서)
 
@@ -113,7 +142,10 @@ Host key verification failed.
 
 ```bash
 # PC에서 — 옛 호스트키 제거 (백업은 known_hosts.old 로 자동 보관됨)
-ssh-keygen -f ~/.ssh/known_hosts -R <robot-ip>      # 예: -R 192.168.210.14
+ssh-keygen -f ~/.ssh/known_hosts -R <robot-ip>      # 예: -R 192.168.210.20
+
+# 3-4-1의 호스트명 별칭을 쓴다면 known_hosts에도 호스트명으로 기록되므로 그쪽도 제거
+ssh-keygen -f ~/.ssh/known_hosts -R tribo-robot.local
 
 # 다시 접속하면 새 키 등록 여부를 물어봄 → yes
 ssh <robot-user>@<robot-ip>
@@ -355,7 +387,7 @@ SLAM Toolbox로 지도를 작성합니다. (`ros-jazzy-slam-toolbox` 패키지 �
 **① 로봇에서: bringup 실행** (모터·오도메트리·라이다·URDF 전체)
 
 ```bash
-# 로봇 (dtrp@192.168.210.14)
+# 로봇 (ssh tribo-robot)
 ros2 launch tribo_bringup bringup.launch.py
 ```
 
@@ -383,7 +415,7 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 `map_saver_cli`는 **실행한 머신의 현재 경로**에 `<이름>.yaml` + `<이름>.pgm` 두 파일을 저장합니다. Nav2가 결국 **로봇에서** map을 로드하므로, 가능하면 **로봇에서 저장**하는 게 가장 간단합니다.
 
 ```bash
-# 로봇에서 저장 → /home/dtrp/my_map.{yaml,pgm} 생성됨
+# 로봇에서 저장 → /home/tribo/my_map.{yaml,pgm} 생성됨
 ros2 run nav2_map_server map_saver_cli -f ~/my_map
 ```
 
@@ -392,10 +424,10 @@ PC에서 저장한 경우, 로봇으로 복사해야 합니다:
 ```bash
 # PC에서 저장했다면
 ros2 run nav2_map_server map_saver_cli -f ~/my_map
-scp ~/my_map.yaml ~/my_map.pgm dtrp@192.168.210.14:/home/dtrp/
+scp ~/my_map.yaml ~/my_map.pgm tribo-robot:~/
 ```
 
-> **최종 상태**: 로봇 측에 `/home/dtrp/my_map.yaml` + `/home/dtrp/my_map.pgm` 두 파일이 있어야 다음 단계(Navigation)가 동작합니다.
+> **최종 상태**: 로봇 측 홈(`~`, 예: `/home/tribo/`)에 `my_map.yaml` + `my_map.pgm` 두 파일이 있어야 다음 단계(Navigation)가 동작합니다.
 
 ### 7-4. Navigation 실행 (Nav2)
 
@@ -413,7 +445,7 @@ ros2 launch tribo_bringup bringup.launch.py
 ```bash
 # 로봇 — map 경로는 "로봇 입장의 절대경로"여야 함
 ros2 launch tribo_navigation bringup_launch.xml \
-  map:=/home/dtrp/my_map.yaml \
+  map:=/home/tribo/my_map.yaml \
   set_initial_pose:=false
 ```
 
@@ -450,7 +482,7 @@ ros2 topic echo /amcl_pose --once  # 현재 추정 위치
 >
 > **⚠️ 함정 — `map:=` 경로는 launch가 실행되는 머신 기준**
 >
-> 위 예시는 로봇에서 `ros2 launch`를 실행하므로 `map:=/home/dtrp/my_map.yaml`(로봇 홈) 입니다. 만약 PC에서 launch를 실행한다면 PC 입장 경로(`/home/deeptree/...`)로 줘야 합니다. PC의 `/home/deeptree/...`를 로봇 launch에 넘기면 `map_server` configure가 "파일을 못 찾는다"며 실패합니다.
+> 위 예시는 로봇에서 `ros2 launch`를 실행하므로 `map:=/home/tribo/my_map.yaml`(로봇 홈) 입니다. 만약 PC에서 launch를 실행한다면 PC 입장 경로(`/home/deeptree/...`)로 줘야 합니다. PC의 `/home/deeptree/...`를 로봇 launch에 넘기면 `map_server` configure가 "파일을 못 찾는다"며 실패합니다.
 
 ### 7-5. 시뮬레이션 (Gazebo) — SLAM/Nav 실습
 
@@ -585,7 +617,7 @@ ros2 param get /tribo_bringup gain_m1     # motor_calib.yaml 값이 나오면 �
 
 | 증상 | 확인 |
 |------|------|
-| SSH 접속 `Connection refused` | 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3-2) |
+| SSH 접속 `Connection refused` | ① 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3-2). ② **하드코딩한 옛 IP로 접속하고 있지 않은지 확인** — DHCP로 IP가 바뀐 뒤 그 IP를 *다른 기기*가 가져가면 `timed out`이 아니라 `refused`가 뜬다. `getent hosts tribo-robot.local`로 현재 IP 확인 후, 호스트명 별칭으로 전환 (3-4-1) |
 | SSH `REMOTE HOST IDENTIFICATION HAS CHANGED` / `Host key verification failed` | 같은 IP에 새 로봇을 올린 경우. PC에서 `ssh-keygen -R <robot-ip>`로 옛 호스트키 제거 후 재접속 (3-5) |
 | `could not open port ...` | `dialout` 그룹 추가 후 재로그인 했는지(5-1), 보드가 연결됐는지 |
 | `ModuleNotFoundError: serial` | `sudo apt install python3-serial` |
