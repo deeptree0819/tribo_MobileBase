@@ -125,7 +125,9 @@ controller_server:
       allow_reversing: false
       rotate_to_heading_min_angle: 0.785
       max_angular_accel: 3.2
-      rotate_to_heading_angular_vel: 1.0
+      # 1.0 -> 0.5: 로봇이 낼 수 있는 제자리 회전은 ~0.6 rad/s 가 한계다(2026-07-13 v2 실측).
+      # 1.0 을 명령하면 실제로는 천장에 눌려 돌므로 Nav2 의 회전 소요시간 예측이 어긋난다.
+      rotate_to_heading_angular_vel: 0.5
       max_robot_pose_search_dist: 10.0
 
 local_costmap:
@@ -261,7 +263,9 @@ behavior_server:
     robot_base_frame: base_link
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
+    # 1.0 -> 0.5: 실측 회전 천장 ~0.6 rad/s (2026-07-13 tribo v2).
+    # min 0.4 는 최소 회전속도(0.19)보다 위라 그대로 둔다 — 더 낮추면 스톨한다.
+    max_rotational_vel: 0.5
     min_rotational_vel: 0.4
     rotational_acc_lim: 3.2
 
@@ -304,8 +308,10 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.25, 0.0, 2.0]
-    min_velocity: [-0.25, 0.0, -2.0]
+    # 각속도 상한 2.0 -> 0.55: 로봇의 실측 제자리 회전 천장이 ~0.6 rad/s 다.
+    # (2026-07-13 tribo v2 실측. 그 이상을 명령해도 물리적으로 안 나온다.)
+    max_velocity: [0.25, 0.0, 0.55]
+    min_velocity: [-0.25, 0.0, -0.55]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
     odom_topic: "odom"

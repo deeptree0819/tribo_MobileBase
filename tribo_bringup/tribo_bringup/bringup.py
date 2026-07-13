@@ -81,6 +81,23 @@ class TriboBringupTribolib(Node):
         self.declare_parameter("rotate_pwm_min", 45.0)         # 회전 시 적용 최소 듀티(%) (>= pwm_min_percent 권장)
         self.declare_parameter("rotate_wz_threshold", 0.10)    # |wz(turn_scale 적용 후)|가 이 값 이상이면 회전으로 간주 [rad/s]
 
+        # ---- 제자리 회전 선형화 (역아핀 보정) ----
+        # 개루프 PWM 에서 실측한 제자리 회전 응답은 비례가 아니라 아핀이다:
+        #     실제_wz ≈ rot_lin_offset + rot_lin_slope * 내부_wz      (내부_wz > 0 일 때)
+        # offset 은 PWM 바닥(rotate_pwm_min)이 만드는 최소 회전속도이고, 이것 때문에
+        # turn_scale 같은 순수 게인으로는 명령을 맞출 수 없다(필요 배율이 명령마다 달라짐).
+        # 그래서 목표 wz 를 역으로 풀어 내부 wz 로 바꿔 보낸다:
+        #     내부_wz = (목표_wz - offset) / slope
+        # 계수는 기체마다 다르다 → motor_calib.yaml 처럼 로봇별로 덮어쓸 것.
+        # 측정: ros2 run tribo_odom rotation_calib 의 '실제/명령' 을 여러 angular_speed 로 스윕.
+        # 주의: 계수는 *제자리* 회전(vx≈0)에서 잰 값이다. 전진 중 선회는 스크럽이 달라
+        #       같은 식이 성립하지 않으므로, |vx| 가 작을 때만 적용한다.
+        self.declare_parameter("rot_lin_enable", True)
+        self.declare_parameter("rot_lin_offset", 0.186)   # rad/s (tribo v2 실측)
+        self.declare_parameter("rot_lin_slope", 0.216)    # (tribo v2 실측)
+        self.declare_parameter("rot_lin_max_wz", 0.55)    # 실측 물리 천장(~0.6)보다 여유 있게 아래
+        self.declare_parameter("rot_lin_vx_max", 0.02)    # |vx| 가 이 이하일 때만 = 제자리 회전으로 간주
+
         # ---- Debug / telemetry ----
         self.declare_parameter("debug_tx", False)
         self.declare_parameter("publish_wheel_speed", True)
@@ -143,6 +160,16 @@ class TriboBringupTribolib(Node):
         self.rotate_pwm_min = float(self.get_parameter("rotate_pwm_min").value)
         self.rotate_pwm_min = self._clamp(self.rotate_pwm_min, 0.0, 100.0)
         self.rotate_wz_threshold = float(self.get_parameter("rotate_wz_threshold").value)
+
+        self.rot_lin_enable = bool(self.get_parameter("rot_lin_enable").value)
+        self.rot_lin_offset = float(self.get_parameter("rot_lin_offset").value)
+        self.rot_lin_slope = float(self.get_parameter("rot_lin_slope").value)
+        self.rot_lin_max_wz = float(self.get_parameter("rot_lin_max_wz").value)
+        self.rot_lin_vx_max = float(self.get_parameter("rot_lin_vx_max").value)
+        if self.rot_lin_enable and self.rot_lin_slope <= 1e-6:
+            self.get_logger().warn(
+                f"rot_lin_slope={self.rot_lin_slope} 가 0 이하 → 회전 선형화를 끈다.")
+            self.rot_lin_enable = False
 
         self.debug_tx = bool(self.get_parameter("debug_tx").value)
         self.publish_wheel_speed = bool(self.get_parameter("publish_wheel_speed").value)
@@ -298,6 +325,32 @@ class TriboBringupTribolib(Node):
         else:
             self._send_pwm(0, 0, 0, 0)
 
+    def _linearize_wz(self, vx: float, wz: float) -> float:
+        """목표 wz [rad/s] → PWM 매핑에 넣을 내부 wz.
+
+        실측 응답이 아핀(실제 = offset + slope*내부)이므로 역으로 푼다.
+        offset 미만은 물리적으로 낼 수 없는 속도다(PWM 바닥이 만드는 최소 회전).
+        그 구간에서는 0으로 죽이지 않고 최소 회전을 유지한다 — 0으로 만들면
+        Nav2 가 각도 오차를 못 줄여 영영 수렴하지 못한다. 대신 목표보다 빨리 돈다.
+        """
+        if not self.rot_lin_enable:
+            return wz
+        # 전진 중 선회는 스크럽 조건이 달라 이 계수가 성립하지 않는다 → 손대지 않는다.
+        if abs(vx) > self.rot_lin_vx_max:
+            return wz
+        if abs(wz) < 1e-9:
+            return wz
+
+        target = min(abs(wz), self.rot_lin_max_wz)   # 낼 수 없는 속도는 요구하지 않는다
+        if target > self.rot_lin_offset:
+            inner = (target - self.rot_lin_offset) / self.rot_lin_slope
+        else:
+            # 목표가 최소 회전속도보다 느림 → 그대로 두면 PWM 바닥이 걸려 어차피
+            # offset 만큼 돈다. 0 으로 만들면 스톨하므로 아주 작은 값을 남긴다.
+            inner = 1e-3
+        inner = self._clamp(inner, 0.0, self.max_ang)
+        return math.copysign(inner, wz)
+
     # ---------- ROS callbacks ----------
     def cb_cmd(self, msg: Twist):
         vx = float(msg.linear.x)
@@ -328,6 +381,10 @@ class TriboBringupTribolib(Node):
             return
 
         # ---- 여기부터 PWM 모드 (per-motor gain 사용) ----
+        # 제자리 회전 선형화: 목표 wz 를 내부 wz 로 역변환한다(위 파라미터 주석 참고).
+        # 여기서부터 wz 는 "보드에 보낼 내부 값"이며, 사용자가 요청한 목표가 아니다.
+        wz = self._linearize_wz(vx, wz)
+
         # 차동 근사: 좌/우 선속도
         v_left = vx - wz * (self.track / 2.0)
         v_right = vx + wz * (self.track / 2.0)

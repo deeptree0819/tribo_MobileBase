@@ -52,6 +52,21 @@ tribo_bringup:
     rotate_pwm_min: 45.0          # min PWM duty (%) for wheels contributing to rotation
     rotate_wz_threshold: 0.10     # rad/s; |wz| above this is treated as a turn
 
+    # In-place rotation linearization (inverse-affine).
+    # Open-loop PWM response is affine, not proportional:
+    #   actual_wz ~= rot_lin_offset + rot_lin_slope * internal_wz
+    # The offset is the floor (rotate_pwm_min) imposing a MINIMUM spin rate, which is why
+    # turn_scale (a pure gain) cannot fix tracking. We invert the fit instead.
+    # ⚠️ PER-ROBOT: these were measured on tribo v2. Re-measure per robot and override in
+    #    config/motor_calib.yaml (gitignored), same as gain_m*.
+    # Measure: sweep `ros2 run tribo_odom rotation_calib -p angular_speed:=<w>` and fit
+    #    actual vs commanded. Battery must be >11V or the fit is garbage.
+    rot_lin_enable: true
+    rot_lin_offset: 0.186         # rad/s — minimum achievable spin (PWM floor)
+    rot_lin_slope: 0.216
+    rot_lin_max_wz: 0.55          # rad/s — measured ceiling is ~0.6; stay under it
+    rot_lin_vx_max: 0.02          # only linearize when |vx| <= this (in-place spin)
+
     # Debug / telemetry
     debug_hw: false
     debug_tx: false
