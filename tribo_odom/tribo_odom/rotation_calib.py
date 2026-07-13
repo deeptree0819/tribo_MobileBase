@@ -158,12 +158,16 @@ class RotationCalib(Node):
         r_raw = raw_a / imu_a if imu_a > 1e-3 else float("nan")
         r_ekf = (ekf_a / imu_a) if (self.use_ekf and imu_a > 1e-3) else float("nan")
         track_true = self.cur_track * r_raw if not math.isnan(r_raw) else float("nan")
+        sign = self._spin_sign()
+        # 명령 대비 실제 회전(개루프 PWM이라 cmd_vel이 실제 rad/s를 보장하지 않음)
+        cmd_a = self.w_speed * self.spin_dur
+        r_cmd = imu_a / cmd_a if cmd_a > 1e-6 else float("nan")
         self.rows.append((math.degrees(imu_a), math.degrees(raw_a),
-                          math.degrees(ekf_a), r_raw, r_ekf, track_true))
+                          math.degrees(ekf_a), r_raw, r_ekf, track_true, sign, r_cmd))
         self.get_logger().info(
             f"  IMU={math.degrees(imu_a):6.1f}deg  wheel={math.degrees(raw_a):6.1f}deg  "
             f"EKF={math.degrees(ekf_a):6.1f}deg | wheel/IMU={r_raw:.3f} "
-            f"EKF/IMU={r_ekf:.3f}  track_true={track_true:.3f}")
+            f"EKF/IMU={r_ekf:.3f}  track_true={track_true:.3f}  실제/명령={r_cmd:.2f}")
         self.state = self.SETTLE
         self.t_state = now
 
@@ -184,12 +188,20 @@ class RotationCalib(Node):
         s = (sum((x - m) ** 2 for x in a) / len(a)) ** 0.5
         return m, s
 
+    # 방향 비대칭이 이보다 크면 "슬립 변동"이 아니라 계통 오차로 본다.
+    ASYM_WARN = 5.0     # %
+    # 명령 대비 실제 회전이 이 아래면 개루프 PWM 매핑이 명령을 못 따라가는 것.
+    CMD_TRACK_WARN = 0.85
+
     def _report(self):
         L = self.get_logger().info
+        W = self.get_logger().warn
         L("========== ROTATION CALIB RESULT ==========")
-        L(" #  IMU(deg) wheel(deg) EKF(deg)  wheel/IMU EKF/IMU track_true")
+        L(" #  dir IMU(deg) wheel(deg) EKF(deg)  wheel/IMU EKF/IMU track_true 실제/명령")
         for i, r in enumerate(self.rows):
-            L(f" {i+1}  {r[0]:7.1f} {r[1]:8.1f} {r[2]:8.1f}   {r[3]:7.3f} {r[4]:7.3f} {r[5]:8.3f}")
+            d = "CCW" if r[6] > 0 else "CW "
+            L(f" {i+1}  {d} {r[0]:7.1f} {r[1]:8.1f} {r[2]:8.1f}   "
+              f"{r[3]:7.3f} {r[4]:7.3f} {r[5]:8.3f} {r[7]:8.2f}")
 
         rr = [r[3] for r in self.rows]
         re = [r[4] for r in self.rows]
@@ -199,13 +211,41 @@ class RotationCalib(Node):
         mt, st = self._mean_std(tt)
         cv = (100.0 * sr / mr) if mr and not math.isnan(mr) and mr != 0 else float("nan")
 
+        # ---- 방향별로 갈라 본다 (평균만 보면 계통 비대칭이 노이즈로 위장된다) ----
+        ccw = [r for r in self.rows if r[6] > 0]
+        cw = [r for r in self.rows if r[6] < 0]
+        asym = float("nan")
+        if ccw and cw:
+            m_ccw, _ = self._mean_std([r[0] for r in ccw])   # IMU 각
+            m_cw, _ = self._mean_std([r[0] for r in cw])
+            t_ccw, _ = self._mean_std([r[5] for r in ccw])   # track_true
+            t_cw, _ = self._mean_std([r[5] for r in cw])
+            base = 0.5 * (m_ccw + m_cw)
+            asym = 100.0 * abs(m_ccw - m_cw) / base if base > 1e-6 else float("nan")
+            L("-------------------------------------------")
+            L(f" 방향별 IMU  : CW={m_cw:.1f}deg  CCW={m_ccw:.1f}deg  → 비대칭 {asym:.1f}%")
+            L(f" 방향별 track: CW={t_cw:.3f} m  CCW={t_ccw:.3f} m")
+
+        # ---- 명령 대비 실제 (개루프 PWM은 cmd_vel 대로 안 돈다) ----
+        mc, _ = self._mean_std([r[7] for r in self.rows])
+        cmd_deg = math.degrees(self.w_speed * self.spin_dur)
+
         L("-------------------------------------------")
         L(f" wheel/IMU : 평균={mr:.3f} 표준편차={sr:.3f} (변동 {cv:.0f}%)")
         L(f" EKF/IMU   : 평균={me:.3f} 표준편차={se:.3f}")
         L(f" track_true: 평균={mt:.3f} m (현재 {self.cur_track}, 물리 {self.phys_track})")
+        L(f" 실제/명령 : 평균={mc:.2f}  (명령 {cmd_deg:.0f}deg 당 실제 {mc*cmd_deg:.0f}deg)")
         L("-------------------------------------------")
-        # 권장
-        if not math.isnan(mr):
+
+        # ---- 판단 ----
+        # 방향 비대칭이 크면 track 하나로 못 맞춘다. 이걸 먼저 걸러야 아래 권장이 의미를 가진다.
+        if not math.isnan(asym) and asym > self.ASYM_WARN:
+            W(f" 방향 비대칭 {asym:.1f}% (>{self.ASYM_WARN:.0f}%) → CW/CCW 가 계통적으로 다르다.")
+            W("   단일 track 으로는 양방향을 동시에 못 맞춘다. track 조정 전에 먼저 확인할 것:")
+            W("     - 모터 게인이 이 기체 것인가 (config/motor_calib.yaml, README 8-2)")
+            W("     - 정/역방향 비대칭 보정 (bringup.yaml gain_left_rev_factor / gain_right_rev_factor)")
+            W("     - IMU 자이로 z 바이어스 (정지 상태에서 /imu/data 의 angular_velocity.z 확인)")
+        elif not math.isnan(mr):
             if math.isnan(cv) or cv > 15.0:
                 L(" 판단: 슬립 변동이 큼(변동>15%) → 고정 track 으로는 한계.")
                 L("       권장: EKF 가 회전을 IMU 자이로로 추정하도록 설정")
@@ -213,11 +253,19 @@ class RotationCalib(Node):
             else:
                 L(f" 판단: 슬립 비교적 안정 → 유효 track 을 {mt:.3f} m 로 설정 권장")
                 L("       (bringup.launch.py _odom_common_params track_width)")
-            if not math.isnan(me):
-                if abs(me - 1.0) <= 0.10:
-                    L(f" EKF/IMU={me:.3f} → EKF 회전이 이미 실제와 일치(±10%). 양호.")
-                else:
-                    L(f" EKF/IMU={me:.3f} → EKF 회전이 실제와 어긋남. 위 권장 적용 필요.")
+
+        if not math.isnan(mc) and mc < self.CMD_TRACK_WARN:
+            W(f" 실제/명령={mc:.2f} → 로봇이 명령한 각속도의 {mc*100:.0f}% 만 돈다.")
+            W("   개루프 PWM 모드(use_motion_mode=false)라 cmd_vel 이 실제 rad/s 를 보장하지 않는다.")
+            W("   Nav2 는 명령대로 돌 것을 가정하므로 회전이 undershoot 된다.")
+            W("   대응: turn_scale 상향, 또는 보드 속도 폐루프(use_motion_mode=true) 검토.")
+
+        if not math.isnan(me):
+            if abs(me - 1.0) <= 0.10:
+                L(f" EKF/IMU={me:.3f} → EKF 회전이 이미 실제와 일치(±10%). 양호.")
+                L("   (EKF yaw 는 IMU 기반이므로 track_width 조정은 /odom_raw 에만 영향)")
+            else:
+                L(f" EKF/IMU={me:.3f} → EKF 회전이 실제와 어긋남. 위 권장 적용 필요.")
         L("===========================================")
 
 
