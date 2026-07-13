@@ -96,32 +96,58 @@ ssh-copy-id <robot-user>@<robot-ip>      # 예: ssh-copy-id tribo@192.168.210.20
 ssh <robot-user>@<robot-ip> 'echo OK'
 ```
 
-### 3-4-1. IP 대신 호스트명으로 고정하기 (권장)
+### 3-4-1. 로봇 IP 확인하고 접속하기
 
-로봇 IP는 **DHCP로 재부팅·재접속·기체 교체 때마다 바뀔 수 있습니다.** 실제로 이 프로젝트에서도 `.14` → `.16` → `.20` → `.23` 으로 세 번 바뀌었고, 그때마다 IP를 하드코딩해 둔 스크립트·문서·alias가 전부 깨졌습니다. 더 나쁜 건, 비워진 옛 IP를 **다른 기기가 가져가면** 접속 시 `timed out`이 아니라 `Connection refused`가 떠서 "로봇이 꺼졌다"고 오진하기 쉽다는 점입니다.
+**tribo 기체는 모두 같은 이미지로 굽기 때문에 hostname이 전부 `tribo-robot`으로 동일합니다.** 그래서 `tribo-robot.local` 같은 mDNS 이름으로는 **어느 기체인지 특정할 수 없습니다.** 같은 와이파이에 두 대 이상 켜면 이름이 충돌해, 접속이 실패하는 게 아니라 **"먼저 부팅한 아무 기체"에 붙습니다** — 의도한 로봇이 아닐 수 있는데도 성공한 것처럼 보이므로 가장 위험한 실패 방식입니다.
 
-그래서 IP는 어디에도 적지 말고, **`~/.ssh/config` 한 곳에서 호스트명으로** 관리합니다. 라즈베리파이/우분투는 mDNS(avahi)가 기본 동작하므로 `<hostname>.local` 이 같은 네트워크에서 자동으로 해석됩니다.
+따라서 **접속 대상 로봇에서 직접 IP를 확인한 뒤 그 IP로 붙습니다.**
 
 ```bash
-# PC ~/.ssh/config
+# ① 로봇에서 (모니터·키보드 연결 상태) — 자기 IP 확인
+hostname -I                    # 가장 간단. 예: 192.168.210.23
+ifconfig wlan0 | grep inet     # 또는 이렇게
+```
+
+```bash
+# ② PC에서 — 확인한 IP로 접속
+ssh tribo@192.168.210.23
+```
+
+> **IP는 DHCP라 재부팅 때마다 바뀔 수 있습니다.** 접속이 안 되면 ①부터 다시 하세요. 특히 **옛 IP를 다른 기기가 가져간 경우 `timed out`이 아니라 `Connection refused`가 뜹니다** — "로봇이 꺼졌다"고 오진하기 쉬우니, 증상보다 ①의 실제 IP를 믿으세요.
+
+**IP를 여러 곳에 흩뿌리지 마세요.** 확인한 IP는 `~/.ssh/config` **한 곳에만** 적고, 나머지 명령·스크립트·문서는 별칭(`tribo-robot`)만 참조합니다. IP가 바뀌면 이 파일의 `HostName` 한 줄만 고치면 됩니다.
+
+```bash
+# PC ~/.ssh/config — IP를 적는 유일한 장소
 Host tribo-robot
-  HostName tribo-robot.local     # 로봇의 hostname + .local (IP를 적지 않는다)
+  HostName 192.168.210.23        # ← ①에서 확인한 IP. 바뀌면 이 줄만 갱신
   User tribo
   IdentityFile ~/.ssh/id_ed25519
   StrictHostKeyChecking accept-new
 ```
 
 ```bash
-# 확인 — 현재 IP가 무엇이든 알아서 찾아감
-getent hosts tribo-robot.local   # 현재 IP 확인용
-ssh tribo-robot 'hostname'       # → tribo-robot
+ssh tribo-robot 'hostname'       # → tribo-robot (접속 확인)
 ```
 
-이제 IP가 바뀌어도 **고칠 곳이 없습니다.** 이후 모든 명령·스크립트는 `user@ip` 대신 `tribo-robot` 별칭만 씁니다(아래 3-4-2).
+#### 지금 붙은 게 정말 그 기체인가 — 시리얼로 확인
 
-> 접속이 안 되면 `getent hosts tribo-robot.local`로 현재 IP부터 확인하세요. 아무것도 안 나오면 로봇이 꺼져 있거나 다른 공유기(AP)에 붙은 것입니다. mDNS가 막힌 네트워크라면 `HostName`에 IP를 직접 적되, **그 한 줄만** 갱신하면 되도록 나머지는 별칭을 유지하세요.
->
-> **기체를 교체했다면**(예: tribo v1 → v2) 호스트명이 같아도 SSH 호스트키는 다르므로 `REMOTE HOST IDENTIFICATION HAS CHANGED` 경고가 뜹니다. 정상이며, 3-5의 절차로 옛 키를 지우고 재접속하면 됩니다.
+hostname이 전부 같으므로 이름으로는 기체를 구별할 수 없습니다. **라즈베리파이 시리얼은 SoC에 박혀 있어 위조·변경이 불가능하므로**, 여러 대를 다룰 때는 이것을 기체 식별의 기준으로 삼으세요.
+
+```bash
+ssh tribo-robot 'grep -m1 "^Serial" /proc/cpuinfo'
+# Serial : 7b6a4fe0834ff68f    ← 이 기체의 고유 번호
+```
+
+기체별 시리얼을 적어두고, 캘리브·배포 전에 대조하면 **엉뚱한 로봇에 밀어 넣는 사고를 막을 수 있습니다.**
+
+| 기체 | Pi 시리얼 | 비고 |
+|------|-----------|------|
+| v2 | `7b6a4fe0834ff68f` | Raspberry Pi 5 Model B Rev 1.1 |
+| v1 | (미확인) | 켤 때 채워 넣을 것 |
+| v3 | (미확인) | 켤 때 채워 넣을 것 |
+
+> **기체를 교체하면** hostname·IP가 같아도 SSH 호스트키가 다르므로 `REMOTE HOST IDENTIFICATION HAS CHANGED` 경고가 뜹니다. 기체를 바꾼 게 맞다면 정상이니 3-5의 절차로 옛 키를 지우고 재접속하세요. **다만 기체를 바꾼 적이 없는데 이 경고가 뜬다면 지우지 말고 의심하세요** — 의도치 않게 다른 로봇에 붙고 있다는 신호입니다.
 
 ### 3-4-2. 자주 쓰는 alias 모음 (선택)
 
@@ -146,7 +172,7 @@ alias kall='pkill -f "ros2 launch tribo"'      # bringup + navigation 전부
 > - **`tribo`** = PC에서 **사람이 직접 치는** 접속 alias. 터미널에서 `tribo` 한 단어면 로봇에 붙습니다.
 > - **`tribo-robot`** = `~/.ssh/config` 의 **Host 별칭**. bash alias는 대화형 셸에서만 로드되므로 `scp`·스크립트·`ssh <host> '<command>'` 같은 비대화형 호출에는 안 먹습니다. 그런 곳에는 `tribo-robot` 을 쓰세요 (예: `scp map.yaml tribo-robot:~/`).
 >
-> 즉 **PC에서 접속할 땐 `tribo`, 문서·스크립트에 적을 땐 `tribo-robot`** 입니다. IP는 어느 쪽에도 쓰지 않습니다.
+> 즉 **PC에서 접속할 땐 `tribo`, 문서·스크립트에 적을 땐 `tribo-robot`** 입니다. **IP는 `~/.ssh/config` 에만 적고, 이 둘 어디에도 쓰지 않습니다** — 그래야 IP가 바뀌어도 고칠 곳이 한 줄뿐입니다.
 
 ### 3-5. 호스트키 변경 경고 — 같은 이름/IP로 다른 로봇에 접속할 때 (PC에서)
 
@@ -165,10 +191,7 @@ Host key verification failed.
 
 ```bash
 # PC에서 — 옛 호스트키 제거 (백업은 known_hosts.old 로 자동 보관됨)
-ssh-keygen -f ~/.ssh/known_hosts -R <robot-ip>      # 예: -R 192.168.210.20
-
-# 3-4-1의 호스트명 별칭을 쓴다면 known_hosts에도 호스트명으로 기록되므로 그쪽도 제거
-ssh-keygen -f ~/.ssh/known_hosts -R tribo-robot.local
+ssh-keygen -f ~/.ssh/known_hosts -R <robot-ip>      # 예: -R 192.168.210.23
 
 # 다시 접속하면 새 키 등록 여부를 물어봄 → yes
 ssh <robot-user>@<robot-ip>
@@ -640,7 +663,8 @@ ros2 param get /tribo_bringup gain_m1     # motor_calib.yaml 값이 나오면 �
 
 | 증상 | 확인 |
 |------|------|
-| SSH 접속 `Connection refused` | ① 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3-2). ② **하드코딩한 옛 IP로 접속하고 있지 않은지 확인** — DHCP로 IP가 바뀐 뒤 그 IP를 *다른 기기*가 가져가면 `timed out`이 아니라 `refused`가 뜬다. `getent hosts tribo-robot.local`로 현재 IP 확인 후, 호스트명 별칭으로 전환 (3-4-1) |
+| SSH 접속 `Connection refused` | ① 로봇에서 `sudo systemctl status ssh` 확인, 없으면 `openssh-server` 설치 (3-2). ② **옛 IP로 접속하고 있지 않은지 확인** — DHCP로 IP가 바뀐 뒤 그 IP를 *다른 기기*가 가져가면 `timed out`이 아니라 `refused`가 뜬다. 로봇에서 `hostname -I`로 현재 IP를 다시 확인할 것 (3-4-1) |
+| 접속은 되는데 **엉뚱한 로봇**에 붙은 것 같음 | 기체들이 hostname이 같아 생기는 문제. `grep -m1 "^Serial" /proc/cpuinfo` 로 Pi 시리얼을 확인해 어느 기체인지 특정 (3-4-1) |
 | SSH `REMOTE HOST IDENTIFICATION HAS CHANGED` / `Host key verification failed` | 같은 IP에 새 로봇을 올린 경우. PC에서 `ssh-keygen -R <robot-ip>`로 옛 호스트키 제거 후 재접속 (3-5) |
 | `could not open port ...` | `dialout` 그룹 추가 후 재로그인 했는지(5-1), 보드가 연결됐는지 |
 | `ModuleNotFoundError: serial` | `sudo apt install python3-serial` |
