@@ -602,30 +602,33 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 | 파일 | 설명 |
 |------|------|
 | `tribo_bringup/config/bringup.yaml`    | 모터별 gain, PWM 최소듀티, cmd 안전(deadzone/timeout) — 시리얼 `port`는 launch가 해석(5-3) |
-| `tribo_bringup/config/motor_calib.yaml` | **로봇별** 모터 gain 오버라이드 (자동 캘리브 결과, 8-2). **gitignore** — 커밋 안 함. 있으면 launch가 bringup.yaml 뒤에 로드해 덮어씀 |
+| `tribo_bringup/config/motor_calib.yaml` | **로봇별** 오버라이드 — 모터 gain(8-1) + 회전 선형화 계수(8-3). **gitignore** — 커밋 안 함. 있으면 launch가 bringup.yaml 뒤에 로드해 덮어씀 |
 | `tribo_bringup/udev/99-tribo-serial.rules` | USB 장치 고정 이름 udev 규칙 (`/dev/tribo_base`, `/dev/tribo_lidar`) |
 | `tribo_bringup/config/robot_geom.yaml` | 공유 기구 파라미터 (track_width, wheel_radius, ticks_per_rev) |
 | `tribo_odom/config/odom.yaml`          | 오도메트리 파라미터 |
 | `tribo_navigation/config/nav2_params.yaml` | Nav2 설정 |
 
-### 8-1. 회전 odom 캘리브레이션 (실로봇)
+### ⚠️ 캘리브 순서와 전제조건 — 먼저 읽으세요
 
-4륜 스키드는 제자리/급회전 시 바퀴가 옆으로 헛돌아 휠 odom 회전이 실제보다 과대 적분됩니다. `rotation_calib` 노드가 제자리 회전을 여러 번 시키며 **휠 odom / IMU 자이로(실제) / EKF 융합**의 회전각을 비교해 슬립 정도와 보정값을 산출합니다.
+**캘리브는 반드시 아래 순서로 하세요. 순서를 바꾸면 앞 단계의 오류가 뒤 단계의 측정값을 오염시켜, 멀쩡한 설정을 범인으로 오해하게 됩니다.**
+
+| 순서 | 항목 | 로봇 자세 | 왜 이 순서인가 |
+|------|------|-----------|----------------|
+| **8-1** | 모터 게인 (`motor_calib`) | **바퀴 들기** (받침대) | 좌우 모터 불균형이 남아 있으면 회전이 방향별로 비대칭이 되어 8-2 의 측정이 통째로 무의미해진다 |
+| **8-2** | 회전 odom (`rotation_calib`) | **바닥** | 게인이 잡힌 뒤라야 슬립이 재현 가능해지고, 그때 비로소 유효 track 이 의미를 갖는다 |
+| **8-3** | 회전 선형화 (`rot_lin_*`) | **바닥** | 8-2 로 odom 이 맞아야 "실제 회전량"을 신뢰할 수 있고, 그래야 명령-실제 응답을 피팅할 수 있다 |
+
+> **실제 사고 사례 (2026-07-13, tribo v2)**: 게인(8-1)을 건너뛰고 회전 odom(8-2)부터 돌렸더니, 도구가 "슬립 안정 → track 0.845 권장"이라는 그럴듯하지만 **틀린 값**을 냈습니다. 실제로는 CW/CCW 가 계통적으로 12% 달랐고(옛 기체의 게인을 쓰고 있었음), 게인을 먼저 잡고 재측정하니 track 이 0.838 로 수렴하며 `wheel/IMU`가 1.001 이 됐습니다. **8-2 를 두 번 돌려야 했습니다.**
+
+**모든 캘리브의 공통 전제 — 배터리 11V 이상.** 전압이 낮으면 모터 토크가 스크럽 마찰을 못 이겨 **바퀴만 헛돌고 로봇은 안 돕니다.** 10.5V 에서 측정했다가 `wheel/IMU=6.9`, `track_true=3.08 m`, 비대칭 72.8% 라는 쓰레기값을 얻고 방금 잡은 올바른 게인을 되돌릴 뻔했습니다. `rotation_calib` 은 이제 `/battery` 를 읽어 11V 미만이면 "측정 무효"를 경고합니다.
 
 ```bash
-# 로봇에서 bringup 실행 후, 별도 터미널에서
-ros2 run tribo_odom rotation_calib --ros-args \
-  -p num_spins:=4 -p spin_duration:=5.0 -p current_track:=0.873
+ros2 topic echo /battery --once     # voltage 11V 이상인지 먼저 확인
 ```
 
-출력 해석:
-- `wheel/IMU` ≈ 1 이고 변동이 작으면 → 유효 트랙이 맞음. 크면 → `track_true` 평균값을 `bringup.launch.py`의 `_odom_common_params` `track_width`에 반영.
-- 슬립 변동(CV)이 크면(>15%) 고정 트랙으로는 한계 → **EKF가 회전을 IMU 자이로로 추정**하도록 설정(현재 기본값). `ekf.yaml`에서 `odom0` yaw/vyaw=false, `imu0` vyaw=true.
-- `EKF/IMU` ≈ 1 이면 내비가 쓰는 `/odom` 회전이 실제와 일치(양호).
+---
 
-> 회전 방향이 IMU와 엔코더가 반대로 나오면 `bringup.yaml`의 `invert_imu_yaw`를 토글하세요. 결과는 출력만 하며 설정을 자동 수정하지 않습니다.
-
-### 8-2. 모터 게인 자동 캘리브레이션 (실로봇) &nbsp;·&nbsp; 🤖 로봇 전용
+### 8-1. 모터 게인 자동 캘리브레이션 (실로봇) &nbsp;·&nbsp; 🤖 로봇 전용
 
 로봇마다 4개 모터(m1=FL, m2=RL, m3=RR, m4=FR)의 개체 편차가 있어, 같은 PWM에도 바퀴 속도가 달라 직진이 틀어집니다. `motor_calib` 노드가 **전진 시 4모터의 엔코더 tick rate를 측정 → 가장 느린 모터에 맞춰 나머지 gain을 낮춤**을 반복해, 불균형이 임계치(기본 5%) 미만으로 **수렴할 때까지** 자동 보정합니다.
 
@@ -653,9 +656,84 @@ bash ~/tribo_ws/src/tribo/tribo_bringup/scripts/motor_calib_converge.sh
 ros2 param get /tribo_bringup gain_m1     # motor_calib.yaml 값이 나오면 반영됨
 ```
 
-> - **바퀴를 든 채로는 회전 관련 추천(`turn_scale`, `gain_*_rev_factor`)이 무의미**합니다 — 로봇이 실제로 안 돌아 `yaw_rate≈0`이라 값이 터무니없이 나옵니다. 직진 gain(`gain_m*`)만 신뢰하고 회전 보정은 바닥에서 8-1로 하세요.
+> - **바퀴를 든 채로는 회전 관련 추천(`turn_scale`, `gain_*_rev_factor`)이 무의미**합니다 — 로봇이 실제로 안 돌아 `yaw_rate≈0`이라 값이 터무니없이 나옵니다. **스크립트가 `turn_scale = 224.8` 같은 값을 추천하는 건 0으로 나눈 것이니 절대 적용하지 마세요.** 직진 gain(`gain_m*`)만 신뢰하고, 회전 보정은 바닥에서 8-2·8-3으로 하세요.
 > - 전진 시 엔코더가 음수로 찍히는 로봇에서는 레거시 로그에 `[직진] 좌/우 부호` 경고가 뜰 수 있으나, 자동 진단 `VERDICT`가 `FAIL_SIGN`이 아니면 **정상**(거짓 경고)입니다.
 > - "가장 느린 모터 기준"이라 빠른 모터가 많이 눌려 **최고 직진 속도가 느린 모터 수준으로 제한**됩니다. 균형 대신 속도를 더 살리려면 기준을 평균으로 바꾸는 옵션을 추가할 수 있습니다.
+
+### 8-2. 회전 odom 캘리브레이션 (실로봇) &nbsp;·&nbsp; 바닥에 내려놓고
+
+> **선행 조건: 8-1(모터 게인)이 끝나 있어야 합니다.** 게인이 이 기체 것이 아니면 아래 측정은 의미가 없습니다.
+
+4륜 스키드는 제자리 회전 시 바퀴가 옆으로 헛돌아(스크럽) 휠 odom 회전이 실제보다 과대 적분됩니다. 그래서 odom 은 물리 트랙이 아니라 **슬립을 흡수한 "유효 트랙"** 을 써야 합니다. `rotation_calib` 이 제자리 회전을 방향 교대로 반복하며 **휠 odom / IMU 자이로(실제) / EKF 융합**을 비교해 그 값을 산출합니다.
+
+```bash
+# 로봇에서 bringup 실행 후, 별도 터미널에서
+ros2 run tribo_odom rotation_calib --ros-args \
+  -p num_spins:=4 -p spin_duration:=5.0 -p current_track:=0.838
+#   current_track := 현재 bringup.launch.py 에 들어있는 track_width
+```
+
+출력에서 볼 것:
+
+| 지표 | 의미 | 판단 |
+|------|------|------|
+| `배터리` | 측정 유효성 | **11V 미만이면 나머지 숫자를 전부 버릴 것** |
+| `odom 편차` | CW/CCW 의 `track_true` 차 | 5% 미만이어야 단일 track 이 성립. 크면 track 조정 보류 |
+| `track_true` | 권장 유효 트랙 | `bringup.launch.py` 의 `_odom_common_params` `track_width` 에 반영 |
+| `wheel/IMU` | 휠 odom 회전 / 실제 회전 | 반영 후 재측정 시 **1.00 에 수렴하면 성공** |
+| `제어 비대칭` | CW/CCW 회전량 차 | odom 이 아니라 **모터** 문제. track 으로는 못 고침 → 8-1 재확인 |
+| `실제/명령` | 명령한 각속도 대비 실제 | 1.0 에서 멀면 8-3 필요 |
+| `EKF/IMU` | 내비가 쓰는 `/odom` 회전의 정확도 | ≈1 이면 양호 |
+
+**`track_width` 를 고친 뒤 반드시 재측정하세요.** `wheel/IMU` 가 1.00 으로 수렴하는 것이 이 캘리브의 성공 판정입니다 (v2 실측: 0.960 → **1.001**, 표준편차 0.004).
+
+> - `제어 비대칭`이 큰데 `odom 편차`는 작을 수 있습니다. 둘은 다른 문제입니다 — 전자는 모터(로봇이 한쪽으로 더 빨리 돎), 후자는 odom 스케일입니다. **track 조정을 막는 것은 후자뿐입니다.**
+> - 슬립 변동(`wheel/IMU` 변동)이 15%를 넘으면 고정 트랙으로는 한계입니다 → EKF 가 회전을 IMU 자이로로 추정하도록 둡니다(현재 기본값: `ekf.yaml` 의 `odom0` yaw/vyaw=false, `imu0` vyaw=true). 이 설정 덕에 `track_width` 오차는 `/odom_raw` 에만 영향을 주고 융합된 `/odom` 회전은 IMU 기준으로 정확합니다.
+> - IMU와 엔코더의 회전 부호가 반대면 `bringup.yaml` 의 `invert_imu_yaw` 를 토글하세요.
+> - 이 노드는 **결과만 출력하고 설정을 자동 수정하지 않습니다.**
+
+### 8-3. 제자리 회전 선형화 (실로봇) &nbsp;·&nbsp; 바닥에 내려놓고
+
+> **선행 조건: 8-2 가 끝나 있어야 합니다.** odom 이 맞아야 "실제 회전량"을 믿을 수 있습니다.
+
+개루프 PWM 에서 회전 응답은 **비례가 아니라 아핀**입니다:
+
+```
+실제_wz ≈ rot_lin_offset + rot_lin_slope × 명령_wz
+```
+
+`offset` 은 PWM 바닥(`rotate_pwm_min`)이 만드는 **최소 회전속도**입니다. 이것 때문에 **`turn_scale` 같은 순수 게인으로는 절대 못 맞춥니다** — offset 을 지울 수 없어 필요한 배율이 명령마다 달라집니다(v2 에선 1.8~3.8). 그래서 bringup 이 **식을 역으로 풀어** 목표 wz 를 내부 wz 로 변환합니다.
+
+**계수 측정** — `angular_speed` 를 바꿔가며 `실제/명령` 을 모읍니다:
+
+```bash
+for w in 0.3 0.6 0.9 1.2 1.6; do
+  ros2 run tribo_odom rotation_calib --ros-args \
+    -p angular_speed:=$w -p num_spins:=2 -p spin_duration:=4.0 -p current_track:=0.838 \
+    2>&1 | grep '실제/명령'
+done
+```
+
+`실제_wz = offset + slope × 명령_wz` 로 직선 피팅해 `bringup.yaml` 에 넣습니다. 명령을 계속 올려도 실제가 더 안 늘어나는 지점이 **물리적 회전 천장**이며, `rot_lin_max_wz` 는 그보다 여유 있게 아래로 잡습니다.
+
+```yaml
+rot_lin_enable: true
+rot_lin_offset: 0.186     # rad/s — 최소 회전속도 (v2 실측)
+rot_lin_slope: 0.216      # (v2 실측)
+rot_lin_max_wz: 0.55      # 실측 천장 ~0.6 보다 아래
+rot_lin_vx_max: 0.02      # |vx| 가 이 이하일 때만 적용 (제자리 회전)
+```
+
+**검증** — 전 구간에서 `실제/명령`이 1.0 근처로 **평평**해야 합니다 (v2: 0.25→1.02, 0.35→1.04, 0.45→1.04, 0.55→1.03).
+
+> - **⚠️ 계수는 기체마다 다릅니다.** `gain_m*` 과 마찬가지로 **로봇별 `motor_calib.yaml` 에서 오버라이드**하세요. 양산 기체에 v2 값을 그대로 쓰면 또 틀어집니다.
+> - **제자리 회전에만 적용됩니다**(`|vx| <= rot_lin_vx_max`). 전진 중 선회는 스크럽 조건이 달라 같은 식이 성립하지 않으므로 손대지 않습니다 — 직진 거동은 영향받지 않습니다.
+> - **최소 회전속도는 없앨 수 없습니다.** 그보다 느리게 명령해도 로봇은 최소 속도로 돕니다(0 으로 죽이면 Nav2 가 각도 오차를 못 줄여 수렴하지 못하므로 일부러 그렇게 둡니다). **Nav2 의 회전 하한(`min_rotational_vel`)을 이 값 위로** 두세요.
+> - **Nav2 의 회전 상한도 실측 천장에 맞추세요.** 낼 수 없는 속도를 명령하면 Nav2 의 소요시간 예측이 어긋납니다. v2 기준: `velocity_smoother` theta 0.55, RPP `rotate_to_heading_angular_vel` 0.5, `behavior_server` `max_rotational_vel` 0.5.
+
+#### 보드 속도 폐루프(`use_motion_mode: true`)를 왜 안 쓰는가
+
+`tribolib` 에 `set_motion()`(보드 PID) 이 있어 시도해볼 수 있지만, **tribo v2 에서는 직진이 깨집니다.** 회전은 정확해지나(0.3 rad/s → 실제 0.30), 직진은 **명령을 0.025~0.45 m/s 로 18배 바꿔도 실제가 0.29~0.37 m/s 로 사실상 단일 속도**가 됩니다. Nav2 는 저속 접근이 필수라 쓸 수 없습니다. (`car_type` 설정이 이 기체 기구학과 안 맞는 것으로 의심되나 미확인.) **개루프 + 8-3 선형화가 현재 유일하게 성립하는 조합입니다.**
 
 ---
 

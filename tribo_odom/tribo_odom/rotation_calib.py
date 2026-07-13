@@ -278,7 +278,7 @@ class RotationCalib(Node):
             W(f" odom 편차 {spread:.1f}% (>{self.TRACK_SPREAD_WARN:.0f}%) → 방향에 따라 휠 odom 스케일이 다르다.")
             W("   단일 track 으로는 양방향을 동시에 못 맞춘다. track 조정은 보류하고 먼저 확인할 것:")
             W("     - 배터리 전압 (낮으면 슬립 폭주 → 측정 무효)")
-            W("     - 모터 게인이 이 기체 것인가 (config/motor_calib.yaml, README 8-2)")
+            W("     - 모터 게인이 이 기체 것인가 (config/motor_calib.yaml, README 8-1)")
         elif not math.isnan(mr):
             if math.isnan(cv) or cv > 15.0:
                 L(" 판단: 슬립 변동이 큼(변동>15%) → 고정 track 으로는 한계.")
