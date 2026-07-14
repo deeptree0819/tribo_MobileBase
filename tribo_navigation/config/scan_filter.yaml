@@ -21,11 +21,25 @@
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: base_link
-        # Start with a conservative box that covers the robot's internal structure.
-        # Tune these to JUST cover the pillars / chassis seen by the LiDAR.
-        min_x: -0.30
-        max_x:  0.30
+        # ROI = 라이다 중심 기준 전방 0.10 / 후방 0.40 / 좌우 0.30 m.
+        # 이 박스 안의 점은 로봇 자기 구조물(기둥·버튼)이므로 버린다.
+        #
+        # ⚠ 박스는 base_link 좌표로 적는데, 라이다는 base_link 앞 x=+0.16 에 있다
+        #   (robot_core.xacro: lidar_x=0.16, chassis 원점 = base_link 원점).
+        #   그래서 라이다 기준 값에 +0.16 을 더해 옮겨 적는다:
+        #     전방 0.10 -> max_x = 0.16 + 0.10 =  0.26
+        #     후방 0.40 -> min_x = 0.16 - 0.40 = -0.24
+        #   좌우는 라이다가 중앙(y=0)이라 그대로.
+        #
+        # ⚠ box_frame 을 laser_link 로 바꾸지 말 것. laser_link 는 yaw=pi 로 180도
+        #   뒤집혀 있어(실로봇 역방향 마운트 보정) +x 가 로봇 뒤를 가리킨다.
+        #   전/후방이 뒤집힌 채 필터링된다.
+        #
+        # 기둥 4개(x=±0.15, y=±0.18)가 모두 이 박스 안에 들어온다.
+        min_x: -0.24
+        max_x:  0.26
         min_y: -0.30
         max_y:  0.30
+        # 2D 스캔이라 z 는 넉넉히 (라이다 평면 z=0.17 부근)
         min_z: -0.50
         max_z:  0.50

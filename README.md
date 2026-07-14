@@ -243,8 +243,13 @@ sudo apt install -y \
   ros-jazzy-robot-state-publisher \
   ros-jazzy-rviz2 \
   ros-jazzy-nav2-bringup \
-  ros-jazzy-slam-toolbox
+  ros-jazzy-slam-toolbox \
+  ros-jazzy-laser-filters
 ```
+
+> `laser_filters`는 라이다 자기 몸체(기둥·버튼 등) 반사를 걸러 `/scan` → `/scan_filtered`를 만듭니다. **필수입니다.** 빠지면 map_building이 `package 'laser_filters' not found`로 즉시 죽습니다.
+>
+> ⚠️ `use_scan_filter:=false`는 **우회 수단이 아닙니다.** 필터 노드만 안 띄울 뿐, SLAM·AMCL·nav2 코스트맵은 전부 `/scan_filtered`를 구독하도록 설정돼 있어(`nav2_params.yaml`, `slam_toolbox_mapping.yaml`, `nav2_localization.yaml`) 아무도 발행하지 않는 토픽을 기다리며 스캔을 한 개도 못 받습니다. 런치는 뜨지만 맵이 안 그려집니다.
 
 시뮬레이션(`tribo_gazebo`)도 쓸 경우 &nbsp;·&nbsp; **🖥️ PC 전용** (로봇에선 불필요):
 
@@ -569,7 +574,7 @@ ros2 run nav2_map_server map_saver_cli -f ~/tribo_map
 
 ```bash
 ros2 launch tribo_navigation bringup_launch.xml \
-  map:=$HOME/tribo_map.yaml use_sim_time:=true use_rviz:=false use_scan_filter:=false
+  map:=$HOME/tribo_map.yaml use_sim_time:=true use_rviz:=false
 
 # 다른 터미널 — RViz (Nav2 Goal 로 목표 지정)
 ros2 launch tribo_navigation nav2_view.launch.xml
@@ -577,7 +582,7 @@ ros2 launch tribo_navigation nav2_view.launch.xml
 
 > **시뮬 주의점**
 > - 시뮬에서는 **항상 `use_sim_time:=true`** (안 주면 TF 시간 불일치로 SLAM/Nav 깨짐).
-> - `laser_filters` 미설치 시 **`use_scan_filter:=false`**. 실로봇과 동일하게 필터까지 쓰려면 `sudo apt install ros-jazzy-laser-filters` 후 옵션 생략.
+> - `laser_filters`는 시뮬에서도 **필수**입니다(`sudo apt install ros-jazzy-laser-filters`). SLAM·nav2가 `/scan_filtered`를 구독하므로 `use_scan_filter:=false`로는 우회되지 않습니다 — 필터를 끄면 그 토픽을 발행하는 노드가 없어져 스캔이 아예 안 들어옵니다.
 > - SLAM과 Nav2는 **동시에 띄우지 말 것** (맵 작성 → 저장 → 종료 → Nav2 순서).
 
 > **⚠️ URDF/xacro 편집 함정 — 주석에 "콜론+공백" 금지**
