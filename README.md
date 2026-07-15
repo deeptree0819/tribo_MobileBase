@@ -356,7 +356,6 @@ ls -l /dev/tribo_base /dev/tribo_lidar
 라즈베리파이 기본 CPU 거버너는 `ondemand`라 부하에 따라 클럭을 **천천히** 올립니다. Nav2 12개 노드가 한꺼번에 뜨는 **버스트 시작** 때 클럭(2.4GHz)이 못 따라와서:
 
 - `controller_server`가 costmap 로딩에 너무 오래 걸려 → `lifecycle_manager: get_state service is not available! Aborting bringup` 으로 **nav 전체가 abort**
-- `ekf_node: Failed to meet update rate!` 스톨 다발
 
 거버너를 `performance`(전 코어 최대 클럭 고정)로 바꾸면 해결됩니다.
 
@@ -554,9 +553,9 @@ ros2 topic echo /amcl_pose --once  # 현재 추정 위치
 
 **구성**
 - **로봇 모델**: 2단 트롤리 외형(하단 구동 베이스 + 모터 4 + 상단 프로파일 프레임 + 선반 플레이트 + LCD). 4륜 차동구동(skid-steer).
-- **센서**: 2D 라이다(`/scan`), IMU(`/imu`), Depth 카메라(`/camera/image`, `/camera/depth_image`, `/camera/points`, `/camera/camera_info`)
+- **센서**: 2D 라이다(`/scan`), Depth 카메라(`/camera/image`, `/camera/depth_image`, `/camera/points`, `/camera/camera_info`)
 - **월드** (`tribo_gazebo/worlds/tribo_world.world`): 8×6 m 실내 — 방 3개 + 복도 + 문 3개 + 장애물 5개(루프 클로저·장애물 회피 연습용). 외부 모델 의존성 없는 self-contained.
-- **odom 보정 완료**: 4륜 스키드 회전 슬립 때문에 `gazebo_control.xacro`의 `wheel_separation`을 물리 트랙(0.50)이 아닌 **유효 트랙 0.65**로 설정. IMU·ground-truth와 비교해 회전·직진 모두 ±2% 일치 검증함.
+- **odom 보정 완료**: 4륜 스키드 회전 슬립 때문에 `gazebo_control.xacro`의 `wheel_separation`을 물리 트랙(0.50)이 아닌 **유효 트랙 0.65**로 설정. 회전·직진 모두 ±2% 일치 검증함.
 
 **① 시뮬 실행**
 
@@ -604,13 +603,12 @@ ros2 launch tribo_navigation nav2_view.launch.xml
 
 #### 시뮬 회전 odom 재보정 (필요 시)
 
-스키드 스티어 회전 슬립이 바뀌면 `gazebo_control.xacro`의 `wheel_separation`을 다시 맞춥니다. 제자리 회전 명령을 주고 odom(바퀴)과 IMU(실제) 각속도를 비교:
+스키드 스티어 회전 슬립이 바뀌면 `gazebo_control.xacro`의 `wheel_separation`을 다시 맞춥니다. sim 의 DiffDrive 플러그인은 완벽한 ground-truth odom 을 내므로, 제자리 회전 명령을 주고 회전한 실제 각도(RViz 에서 로봇 자세, 또는 gz `/world/.../pose`)와 `/odom` yaw 변화를 비교:
 
 ```bash
 ros2 topic pub -r 20 /cmd_vel geometry_msgs/msg/Twist "{angular: {z: 0.6}}"
 ros2 topic echo /odom --field twist.twist.angular.z   # RViz 가 쓰는 값
-ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
-# 새 값 = 현재값 * (odom 각속도 / imu 각속도)
+# 새 값 = 현재값 * (실제 각속도 / odom 각속도)
 ```
 
 ---
@@ -633,12 +631,12 @@ ros2 topic echo /imu  --field angular_velocity.z       # Gazebo 실제 회전
 | 순서 | 항목 | 로봇 자세 | 왜 이 순서인가 |
 |------|------|-----------|----------------|
 | **8-1** | 모터 게인 (`motor_calib`) | **바퀴 들기** (받침대) | 좌우 모터 불균형이 남아 있으면 회전이 방향별로 비대칭이 되어 8-2 의 측정이 통째로 무의미해진다 |
-| **8-2** | 회전 odom (`rotation_calib`) | **바닥** | 게인이 잡힌 뒤라야 슬립이 재현 가능해지고, 그때 비로소 유효 track 이 의미를 갖는다 |
+| **8-2** | 회전 odom (`track_width` 수동) | **바닥** | 게인이 잡힌 뒤라야 슬립이 재현 가능해지고, 그때 비로소 유효 track 이 의미를 갖는다 |
 | **8-3** | 회전 선형화 (`rot_lin_*`) | **바닥** | 8-2 로 odom 이 맞아야 "실제 회전량"을 신뢰할 수 있고, 그래야 명령-실제 응답을 피팅할 수 있다 |
 
-> **실제 사고 사례 (2026-07-13, tribo v2)**: 게인(8-1)을 건너뛰고 회전 odom(8-2)부터 돌렸더니, 도구가 "슬립 안정 → track 0.845 권장"이라는 그럴듯하지만 **틀린 값**을 냈습니다. 실제로는 CW/CCW 가 계통적으로 12% 달랐고(옛 기체의 게인을 쓰고 있었음), 게인을 먼저 잡고 재측정하니 track 이 0.838 로 수렴하며 `wheel/IMU`가 1.001 이 됐습니다. **8-2 를 두 번 돌려야 했습니다.**
+> **자동 캘리브 도구 `rotation_calib` 은 2026-07-15 제거되었습니다.** 이 도구는 IMU 자이로를 "실제 회전량"의 기준으로 삼았는데, 이 보드의 자이로가 **지속 회전 약 2.4초(≈24°) 후 0으로 죽는** 결함이 확인되어(라이다 독립 측정으로 검증) IMU·EKF 를 워크스페이스 전체에서 제거했습니다. 회전 yaw 는 이제 **휠 오도메트리 단독**(`odom_publisher` → `/odom` + TF)으로만 추정하며, 그 정확도는 `track_width` 한 값에 달려 있습니다. 8-2·8-3 은 그래서 라이다로 실제 회전각을 재는 수동 절차로 바뀌었습니다.
 
-**모든 캘리브의 공통 전제 — 배터리 11V 이상.** 전압이 낮으면 모터 토크가 스크럽 마찰을 못 이겨 **바퀴만 헛돌고 로봇은 안 돕니다.** 10.5V 에서 측정했다가 `wheel/IMU=6.9`, `track_true=3.08 m`, 비대칭 72.8% 라는 쓰레기값을 얻고 방금 잡은 올바른 게인을 되돌릴 뻔했습니다. `rotation_calib` 은 이제 `/battery` 를 읽어 11V 미만이면 "측정 무효"를 경고합니다.
+**모든 캘리브의 공통 전제 — 배터리 11V 이상.** 전압이 낮으면 모터 토크가 스크럽 마찰을 못 이겨 **바퀴만 헛돌고 로봇은 안 돕니다.** 저전압에서 측정하면 `track_true` 가 3 m 대까지 튀는 쓰레기값이 나와 방금 잡은 올바른 게인을 되돌릴 뻔한 사례가 있었습니다. **측정 전 반드시 전압부터 확인하세요.**
 
 ```bash
 ros2 topic echo /battery --once     # voltage 11V 이상인지 먼저 확인
@@ -682,33 +680,19 @@ ros2 param get /tribo_bringup gain_m1     # motor_calib.yaml 값이 나오면 �
 
 > **선행 조건: 8-1(모터 게인)이 끝나 있어야 합니다.** 게인이 이 기체 것이 아니면 아래 측정은 의미가 없습니다.
 
-4륜 스키드는 제자리 회전 시 바퀴가 옆으로 헛돌아(스크럽) 휠 odom 회전이 실제보다 과대 적분됩니다. 그래서 odom 은 물리 트랙이 아니라 **슬립을 흡수한 "유효 트랙"** 을 써야 합니다. `rotation_calib` 이 제자리 회전을 방향 교대로 반복하며 **휠 odom / IMU 자이로(실제) / EKF 융합**을 비교해 그 값을 산출합니다.
+4륜 스키드는 제자리 회전 시 바퀴가 옆으로 헛돌아(스크럽) 휠 odom 회전이 실제보다 과대 적분됩니다. 그래서 odom 은 물리 트랙이 아니라 **슬립을 흡수한 "유효 트랙"**(`track_width`)을 써야 합니다. IMU 를 제거했으므로 "실제 회전량"의 기준은 **라이다**입니다 — 로봇을 제자리 회전시키며 연속 `/scan` 을 각도축에서 상관(cross-correlation)시키면 자이로 없이 실제 회전각이 나옵니다(스크럽·헛돎에 영향받지 않음).
 
-```bash
-# 로봇에서 bringup 실행 후, 별도 터미널에서
-ros2 run tribo_odom rotation_calib --ros-args \
-  -p num_spins:=4 -p spin_duration:=5.0 -p current_track:=0.838
-#   current_track := 현재 bringup.launch.py 에 들어있는 track_width
-```
+측정·조정 절차:
 
-출력에서 볼 것:
+1. 로봇을 특징이 있는 벽·기둥이 보이는 곳에 놓고 bringup 실행.
+2. 제자리 회전(`ros2 topic pub /cmd_vel ... angular.z: 0.4`)시키며 **라이다 실제 회전각**과 **`/odom` yaw 변화**를 같은 시간 동안 비교.
+3. `track_width_new = track_width_cur × (라이다 실제 회전 / odom yaw 회전)` 으로 갱신.
+4. `bringup.launch.py` 의 `_odom_common_params["track_width"]` 에 반영 후 재측정 → `/odom` 회전이 라이다와 **±3% 이내로 일치**하면 성공.
 
-| 지표 | 의미 | 판단 |
-|------|------|------|
-| `배터리` | 측정 유효성 | **11V 미만이면 나머지 숫자를 전부 버릴 것** |
-| `odom 편차` | CW/CCW 의 `track_true` 차 | 5% 미만이어야 단일 track 이 성립. 크면 track 조정 보류 |
-| `track_true` | 권장 유효 트랙 | `bringup.launch.py` 의 `_odom_common_params` `track_width` 에 반영 |
-| `wheel/IMU` | 휠 odom 회전 / 실제 회전 | 반영 후 재측정 시 **1.00 에 수렴하면 성공** |
-| `제어 비대칭` | CW/CCW 회전량 차 | odom 이 아니라 **모터** 문제. track 으로는 못 고침 → 8-1 재확인 |
-| `실제/명령` | 명령한 각속도 대비 실제 | 1.0 에서 멀면 8-3 필요 |
-| `EKF/IMU` | 내비가 쓰는 `/odom` 회전의 정확도 | ≈1 이면 양호 |
+> **현재 이 기체는 `track_width: 0.838` 고정** (v2 실측값). 라이다 실측 대비 휠이 회전을 ~5% 적게 보는 정황이 있어 실제로는 ~0.885 방향이지만, 재캘리브 도구를 제거하고 값을 고정했습니다. 필요 시 위 절차로 이 한 값만 조정하세요.
 
-**`track_width` 를 고친 뒤 반드시 재측정하세요.** `wheel/IMU` 가 1.00 으로 수렴하는 것이 이 캘리브의 성공 판정입니다 (v2 실측: 0.960 → **1.001**, 표준편차 0.004).
-
-> - `제어 비대칭`이 큰데 `odom 편차`는 작을 수 있습니다. 둘은 다른 문제입니다 — 전자는 모터(로봇이 한쪽으로 더 빨리 돎), 후자는 odom 스케일입니다. **track 조정을 막는 것은 후자뿐입니다.**
-> - 슬립 변동(`wheel/IMU` 변동)이 15%를 넘으면 고정 트랙으로는 한계입니다 → EKF 가 회전을 IMU 자이로로 추정하도록 둡니다(현재 기본값: `ekf.yaml` 의 `odom0` yaw/vyaw=false, `imu0` vyaw=true). 이 설정 덕에 `track_width` 오차는 `/odom_raw` 에만 영향을 주고 융합된 `/odom` 회전은 IMU 기준으로 정확합니다.
-> - IMU와 엔코더의 회전 부호가 반대면 `bringup.yaml` 의 `invert_imu_yaw` 를 토글하세요.
-> - 이 노드는 **결과만 출력하고 설정을 자동 수정하지 않습니다.**
+> - **`제어 비대칭`(CW/CCW 회전량 차)이 큰데 odom 스케일은 맞을 수 있습니다.** 둘은 다른 문제입니다 — 전자는 모터(로봇이 한쪽으로 더 빨리 돎, 8-1 재확인), 후자는 `track_width`(odom 스케일)입니다.
+> - 슬립 변동이 심해 방향마다 `track_true` 가 크게 다르면 단일 고정 트랙으로는 한계입니다. 그때는 기계(바퀴 접지·마운트)부터 점검하세요 — 한 바퀴가 뜨면 방향별로 값이 튑니다.
 
 ### 8-3. 제자리 회전 선형화 (실로봇) &nbsp;·&nbsp; 바닥에 내려놓고
 
@@ -722,17 +706,9 @@ ros2 run tribo_odom rotation_calib --ros-args \
 
 `offset` 은 PWM 바닥(`rotate_pwm_min`)이 만드는 **최소 회전속도**입니다. 이것 때문에 **`turn_scale` 같은 순수 게인으로는 절대 못 맞춥니다** — offset 을 지울 수 없어 필요한 배율이 명령마다 달라집니다(v2 에선 1.8~3.8). 그래서 bringup 이 **식을 역으로 풀어** 목표 wz 를 내부 wz 로 변환합니다.
 
-**계수 측정** — `angular_speed` 를 바꿔가며 `실제/명령` 을 모읍니다:
+**계수 측정** — `angular_speed` 를 바꿔가며 명령 wz 대비 **실제 wz**(라이다 스캔 상관으로 측정, 8-2 와 동일 방식)를 모읍니다. 각 속도에서 제자리 회전시키고 `라이다 실제 회전각 / 회전 시간` 으로 실제 wz 를 구해 `(명령_wz, 실제_wz)` 쌍을 쌓습니다.
 
-```bash
-for w in 0.3 0.6 0.9 1.2 1.6; do
-  ros2 run tribo_odom rotation_calib --ros-args \
-    -p angular_speed:=$w -p num_spins:=2 -p spin_duration:=4.0 -p current_track:=0.838 \
-    2>&1 | grep '실제/명령'
-done
-```
-
-`실제_wz = offset + slope × 명령_wz` 로 직선 피팅해 `bringup.yaml` 에 넣습니다. 명령을 계속 올려도 실제가 더 안 늘어나는 지점이 **물리적 회전 천장**이며, `rot_lin_max_wz` 는 그보다 여유 있게 아래로 잡습니다.
+`실제_wz = offset + slope × 명령_wz` 로 직선 피팅해 `bringup.yaml`(또는 로봇별 `motor_calib.yaml`)에 넣습니다. 명령을 계속 올려도 실제가 더 안 늘어나는 지점이 **물리적 회전 천장**이며, `rot_lin_max_wz` 는 그보다 여유 있게 아래로 잡습니다.
 
 ```yaml
 rot_lin_enable: true
@@ -769,6 +745,6 @@ rot_lin_vx_max: 0.02      # |vx| 가 이 이하일 때만 적용 (제자리 회�
 | bringup 중복 실행 시 `multiple access on port` | `bringup.launch.py`가 시작 시 이전 인스턴스를 자동 정리함. 끄려면 `TRIBO_AUTOCLEAN=0` |
 | 라이다 `/scan` 안 나옴 | `ls /dev/tribo_lidar`(또는 by-id) 존재 여부, 라이다 전원/USB 연결 |
 | `sllidar_ros2` 빌드 누락 | `git submodule update --init --recursive` 후 재빌드 |
-| Nav2 `get_state service is not available! Aborting bringup` / `ekf_node: Failed to meet update rate!` | CPU 거버너를 `performance`로(5-4). Pi5에서 거의 항상 이 원인. RViz는 PC에서(`use_rviz:=false`) |
+| Nav2 `get_state service is not available! Aborting bringup` | CPU 거버너를 `performance`로(5-4). Pi5에서 거의 항상 이 원인. RViz는 PC에서(`use_rviz:=false`) |
 | nav/bringup을 Ctrl-C로 껐는데 노드가 안 죽고 남음 | `ros2 launch`는 Ctrl-C 한 번만 처리(이후 무시), sllidar는 종료 느림. 재실행 전 `pkill -9 -f 'ros-args'`로 잔여 노드 정리 (bringup auto-clean은 nav 노드는 안 건드림) |
 | `odom_publisher: No package metadata was found for tribo-odom` | entry point 추가 후 증분 빌드 깨짐. `rm -rf build/tribo_odom install/tribo_odom src/tribo/tribo_odom/tribo_odom.egg-info && colcon build --packages-select tribo_odom --symlink-install` |

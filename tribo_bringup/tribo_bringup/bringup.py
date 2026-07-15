@@ -26,7 +26,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Int32MultiArray, Float32MultiArray
-from sensor_msgs.msg import Imu, BatteryState
+from sensor_msgs.msg import BatteryState
 
 from .tribolib import TriboBase
 
@@ -73,6 +73,16 @@ class TriboBringupTribolib(Node):
         # |x|>0 일 때 최소 듀티(%)를 설정
         self.declare_parameter("pwm_min_percent", 20.0)    # 0~100
 
+        # ---- PWM 천장 (전류 상한) ----
+        # PWM 은 pwm_min ~ pwm_max 구간으로 매핑된다. 기본 100 = 종전과 동일.
+        # ⚠️ max_lin_vel 을 낮춰 "속도를 줄이는" 것은 역효과다. 정규화가
+        #    a = |v_바퀴| / max_lin_vel 이라 분모를 줄이면 a 가 커져 PWM 이 오른다.
+        #    모터 출력·전류를 실제로 줄이려면 이 천장을 내려야 한다.
+        # 제자리 회전은 4바퀴가 동시에 스크럽과 싸워 전류 피크가 가장 크다.
+        # 전원(배터리/어댑터)이 그 피크를 못 버티면 과전류 보호가 트립되어
+        # 로봇이 리셋된다 → 기체·전원별로 낮춰 잡을 것 (motor_calib.yaml).
+        self.declare_parameter("pwm_max_percent", 100.0)   # 0~100
+
         # ---- 회전 전용 PWM 부스트 ----
         # 4륜 스키드-스티어는 제자리 회전 시 횡방향 타이어 스크럽 마찰로 stall한다.
         # 회전 성분(wz)이 유의미할 때만 그 회전에 기여하는 바퀴의 PWM 바닥을
@@ -89,7 +99,9 @@ class TriboBringupTribolib(Node):
         # 그래서 목표 wz 를 역으로 풀어 내부 wz 로 바꿔 보낸다:
         #     내부_wz = (목표_wz - offset) / slope
         # 계수는 기체마다 다르다 → motor_calib.yaml 처럼 로봇별로 덮어쓸 것.
-        # 측정: ros2 run tribo_odom rotation_calib 의 '실제/명령' 을 여러 angular_speed 로 스윕.
+        # 측정: 여러 angular_speed 로 제자리 회전시키며 명령 wz 대비 실제 wz 를 잰다.
+        #       (실제 wz 는 라이다 스캔 상관으로 측정 — IMU 기반 rotation_calib 은 보드
+        #        자이로가 지속 회전에서 죽어 2026-07-15 제거됨.)
         # 주의: 계수는 *제자리* 회전(vx≈0)에서 잰 값이다. 전진 중 선회는 스크럽이 달라
         #       같은 식이 성립하지 않으므로, |vx| 가 작을 때만 적용한다.
         self.declare_parameter("rot_lin_enable", True)
@@ -104,13 +116,6 @@ class TriboBringupTribolib(Node):
         self.declare_parameter("publish_wheel_delta", False)
         self.declare_parameter("debug_enc_speed", True)
         self.declare_parameter("debug_enc_period", 0.5)
-
-        # ---- IMU publish (보드 9축 IMU → sensor_msgs/Imu) ----
-        self.declare_parameter("publish_imu", True)
-        self.declare_parameter("imu_topic", "imu/data")   # 보드가 자세 융합 제공 → orientation 포함
-        self.declare_parameter("imu_frame", "base_link")  # TF에 존재하는 프레임 (별도 imu_link 추가 시 변경)
-        self.declare_parameter("imu_rate", 50.0)          # Hz (ekf frequency와 맞춤)
-        self.declare_parameter("invert_imu_yaw", False)   # yaw/gz 부호가 odom과 반대일 때 True
 
         # ---- Battery (board voltage -> sensor_msgs/BatteryState) ----
         self.declare_parameter("publish_battery", True)
@@ -157,6 +162,9 @@ class TriboBringupTribolib(Node):
         self.pwm_min_percent = float(self.get_parameter("pwm_min_percent").value)
         self.pwm_min_percent = self._clamp(self.pwm_min_percent, 0.0, 100.0)
 
+        self.pwm_max_percent = float(self.get_parameter("pwm_max_percent").value)
+        self.pwm_max_percent = self._clamp(self.pwm_max_percent, 0.0, 100.0)
+
         self.rotate_pwm_min = float(self.get_parameter("rotate_pwm_min").value)
         self.rotate_pwm_min = self._clamp(self.rotate_pwm_min, 0.0, 100.0)
         self.rotate_wz_threshold = float(self.get_parameter("rotate_wz_threshold").value)
@@ -176,12 +184,6 @@ class TriboBringupTribolib(Node):
         self.publish_wheel_delta = bool(self.get_parameter("publish_wheel_delta").value)
         self.debug_enc_speed = bool(self.get_parameter("debug_enc_speed").value)
         self.debug_enc_period = float(self.get_parameter("debug_enc_period").value)
-
-        self.publish_imu = bool(self.get_parameter("publish_imu").value)
-        self.imu_topic = str(self.get_parameter("imu_topic").value)
-        self.imu_frame = str(self.get_parameter("imu_frame").value)
-        self.imu_rate = float(self.get_parameter("imu_rate").value)
-        self.invert_imu_yaw = bool(self.get_parameter("invert_imu_yaw").value)
 
         self.publish_battery = bool(self.get_parameter("publish_battery").value)
         self.battery_topic = str(self.get_parameter("battery_topic").value)
@@ -217,10 +219,6 @@ class TriboBringupTribolib(Node):
         if self.publish_wheel_delta:
             self.pub_delta = self.create_publisher(Int32MultiArray, "wheel_delta_ticks", 50)
 
-        self.pub_imu = None
-        if self.publish_imu:
-            self.pub_imu = self.create_publisher(Imu, self.imu_topic, 50)
-
         self.pub_battery = None
         if self.publish_battery:
             self.pub_battery = self.create_publisher(BatteryState, self.battery_topic, 10)
@@ -236,9 +234,6 @@ class TriboBringupTribolib(Node):
         self.create_timer(0.05, self._watchdog)
         # encoder polling (TriboBase 내부 상태를 읽어서 퍼블리시)
         self.create_timer(0.05, self._enc_timer_cb)
-        # IMU publishing (보드 자동보고 캐시에서 읽어 /imu/data 퍼블리시)
-        if self.pub_imu is not None:
-            self.create_timer(1.0 / max(self.imu_rate, 1.0), self._imu_timer_cb)
         # Battery publishing (보드 전압 캐시 → /battery)
         if self.pub_battery is not None:
             self.create_timer(1.0 / max(self.battery_rate, 0.1), self._battery_timer_cb)
@@ -253,7 +248,6 @@ class TriboBringupTribolib(Node):
             f"{self.gain['m3']:.2f},{self.gain['m4']:.2f}), "
             f"pwm_min_percent={self.pwm_min_percent:.1f}, "
             f"rotate_pwm_min={self.rotate_pwm_min:.1f} (wz_thr={self.rotate_wz_threshold:.2f}), "
-            f"publish_imu={self.publish_imu} (topic={self.imu_topic}, frame={self.imu_frame}), "
             f"publish_battery={self.publish_battery} (topic={self.battery_topic})"
         )
 
@@ -261,18 +255,6 @@ class TriboBringupTribolib(Node):
     @staticmethod
     def _clamp(x, lo, hi):
         return max(lo, min(hi, x))
-
-    @staticmethod
-    def _euler_to_quat(roll: float, pitch: float, yaw: float):
-        """roll/pitch/yaw [rad] → quaternion (x, y, z, w)."""
-        cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
-        cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
-        cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
-        qx = sr * cp * cy - cr * sp * sy
-        qy = cr * sp * cy + sr * cp * sy
-        qz = cr * cp * sy - sr * sp * cy
-        qw = cr * cp * cy + sr * sp * sy
-        return qx, qy, qz, qw
 
     def _to_pwm_percent(self, x_norm: float, pwm_min: float = None) -> int:
         """
@@ -289,8 +271,11 @@ class TriboBringupTribolib(Node):
         s = 1 if x_norm > 0 else -1
         a = self._clamp(abs(x_norm), 0.0, 1.0)
 
-        # 최소 듀티 확보 (deadzone 넘어가도록)
-        p = pwm_min + a * (100.0 - pwm_min)
+        # 듀티는 [pwm_min, pwm_max] 구간으로 매핑한다.
+        # pwm_min: 정지마찰/스크럽을 넘기는 바닥. pwm_max: 전류 피크를 묶는 천장.
+        # 바닥이 천장보다 높게 잘못 설정돼도 바닥을 우선해 stall 은 피한다.
+        pwm_max = max(self.pwm_max_percent, pwm_min)
+        p = pwm_min + a * (pwm_max - pwm_min)
         p = self._clamp(p, 0.0, 100.0)
         return int(round(s * p))
 
@@ -429,68 +414,6 @@ class TriboBringupTribolib(Node):
         dt = (now - self.last_cmd_time).nanoseconds * 1e-9
         if dt > self.cmd_timeout:
             self._send_stop()
-
-    # ---------- IMU publishing ----------
-    def _imu_timer_cb(self):
-        """
-        TriboBase 캐시(보드 자동보고)에서 자세/각속도/가속도를 읽어
-        sensor_msgs/Imu 로 퍼블리시. ekf.yaml의 imu0(/imu/data)에 사용.
-        """
-        if self.pub_imu is None:
-            return
-
-        ax, ay, az = self.base.get_accel()           # m/s^2
-        gx, gy, gz = self.base.get_gyro()             # rad/s
-        roll, pitch, _yaw_raw = self.base.get_attitude(in_degrees=False)
-
-        # 주의(2025-05): 보드 펌웨어가 REPORT_IMU_ATT의 yaw를 갱신하지 않음 (raw bytes freeze 확인).
-        # gz/roll/pitch는 정상. 따라서 orientation의 yaw는 사용하지 않고 EKF는 vyaw(=gz)로만 yaw 추정.
-        # orientation은 roll/pitch만 유효하다고 보고 yaw는 0으로 채움. 공분산을 1e6으로 키워 무력화.
-        yaw = 0.0
-
-        if self.invert_imu_yaw:
-            gz = -gz
-
-        qx, qy, qz, qw = self._euler_to_quat(roll, pitch, yaw)
-
-        msg = Imu()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.imu_frame
-
-        msg.orientation.x = float(qx)
-        msg.orientation.y = float(qy)
-        msg.orientation.z = float(qz)
-        msg.orientation.w = float(qw)
-
-        msg.angular_velocity.x = float(gx)
-        msg.angular_velocity.y = float(gy)
-        msg.angular_velocity.z = float(gz)
-
-        msg.linear_acceleration.x = float(ax)
-        msg.linear_acceleration.y = float(ay)
-        msg.linear_acceleration.z = float(az)
-
-        # 대각 공분산:
-        #   - orientation roll/pitch/yaw 모두 EKF가 무시하도록 1e6 (yaw는 보드가 freeze, roll/pitch는 평면 로봇 two_d_mode가 어차피 무시)
-        #   - angular_velocity z(=gz)만 신뢰 → EKF가 vyaw로 yaw 추정
-        #   - linear_acceleration은 EKF에서 미사용
-        msg.orientation_covariance = [
-            1e6, 0.0, 0.0,
-            0.0, 1e6, 0.0,
-            0.0, 0.0, 1e6,
-        ]
-        msg.angular_velocity_covariance = [
-            1e6, 0.0, 0.0,
-            0.0, 1e6, 0.0,
-            0.0, 0.0, 0.01,
-        ]
-        msg.linear_acceleration_covariance = [
-            0.1, 0.0, 0.0,
-            0.0, 0.1, 0.0,
-            0.0, 0.0, 0.1,
-        ]
-
-        self.pub_imu.publish(msg)
 
     # ---------- Battery publishing ----------
     def _battery_timer_cb(self):

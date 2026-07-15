@@ -46,6 +46,17 @@ tribo_bringup:
     # Minimum PWM to overcome static friction (0~100)
     pwm_min_percent: 35.0
 
+    # Maximum PWM duty (0~100) — caps peak motor current.
+    # ⚠️ Do NOT try to "slow the robot down" by lowering max_lin_vel. Normalization is
+    #    a = |v_wheel| / max_lin_vel, so shrinking the denominator RAISES the duty.
+    #    This ceiling is the only knob that actually reduces motor output/current.
+    # In-place rotation is the worst case: all 4 wheels fight scrub friction at once.
+    # If the supply (battery/adapter) cannot take that peak, over-current protection
+    # trips and the robot resets mid-drive.
+    # ⚠️ PER-ROBOT: a unit with a weak/binding motor needs a high rotate_pwm_min to spin
+    #    at all, which pushes current up — cap it here via config/motor_calib.yaml.
+    pwm_max_percent: 100.0
+
     # Rotation-only PWM boost (skid-steer lateral scrub friction stalls in-place turns).
     # Applied ONLY when |wz| (after turn_scale) >= rotate_wz_threshold; pure straight
     # driving keeps pwm_min_percent (no effect). Tuned on-floor 2026-06-15.
@@ -75,13 +86,6 @@ tribo_bringup:
 
     publish_wheel_speed: true
     publish_wheel_delta: true
-
-    # IMU (board 9-axis -> sensor_msgs/Imu on /imu/data)
-    publish_imu: true
-    imu_topic: "imu/data"
-    imu_frame: "base_link"
-    imu_rate: 50.0
-    invert_imu_yaw: true    # board gz spins opposite to encoder odom (verified 2026-06-11)
 
     # Battery (board voltage -> sensor_msgs/BatteryState on /battery)
     publish_battery: true

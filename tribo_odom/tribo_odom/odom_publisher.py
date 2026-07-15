@@ -28,7 +28,7 @@ class TriboOdom(Node):
 
         # ----- 파라미터 선언 -----
         self.declare_parameter("encoder_topic", "encoder_raw")  # bringup에서 퍼블리시하는 토픽 이름
-        self.declare_parameter("output_topic", "odom")          # 출력 토픽 (EKF 융합 시 "odom_raw" 권장)
+        self.declare_parameter("output_topic", "odom")          # 출력 토픽 (/odom + TF 단일 경로)
         self.declare_parameter("wheel_radius", 0.04)            # m
         self.declare_parameter("ticks_per_rev", 4320)           # 한 바퀴당 tick 수
         self.declare_parameter("track_width", 0.397)             # m (좌우 바퀴 사이 거리)

@@ -12,7 +12,6 @@
     </plugin>
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
-    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
 
     <!-- 바닥 (인라인 ground plane, 외부 모델 불필요) -->
     <model name="ground_plane">

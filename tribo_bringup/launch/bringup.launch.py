@@ -7,7 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.substitutions import LaunchConfiguration, Command, AndSubstitution, NotSubstitution
+from launch.substitutions import LaunchConfiguration, Command
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
@@ -51,8 +51,7 @@ LIDAR_SERIAL_PORT = _resolve_port(
 BRINGUP_NODE_COMMS = {
     "bringup",          # tribo_bringup base-board driver (holds base serial)
     "sllidar_node",     # lidar driver (holds lidar serial)
-    "odom_publisher",   # tribo_odom  -> /odom_raw or /odom + TF
-    "ekf_node",         # robot_localization -> /odom + TF
+    "odom_publisher",   # tribo_odom  -> /odom + TF
     "joint_state_pub",  # joint_state_publisher (comm truncated)
     "robot_state_pub",  # robot_state_publisher (comm truncated)
 }
@@ -65,9 +64,9 @@ def _clean_stale_nodes():
     next launch those orphans cause two failure modes:
       1) serial: the base-board / lidar port is still held -> 'multiple access
          on port' / lidar 'OPERATION_TIMEOUT'.
-      2) duplicate ROS nodes: a second odom_publisher / ekf_node keeps
-         publishing /odom and the odom->base_link TF, silently corrupting
-         odometry even though nothing errors out.
+      2) duplicate ROS nodes: a second odom_publisher keeps publishing /odom
+         and the odom->base_link TF, silently corrupting odometry even though
+         nothing errors out.
 
     We scan /proc and SIGKILL a process if it either (a) holds one of our exact
     serial devices, or (b) has a comm in BRINGUP_NODE_COMMS. comm-matching never
@@ -152,10 +151,6 @@ def generate_launch_description():
     # odom
     use_odom = LaunchConfiguration("use_odom")
 
-    # ekf (sensor fusion: encoder odom + IMU)
-    use_ekf = LaunchConfiguration("use_ekf")
-    ekf_params_file = LaunchConfiguration("ekf_params_file")
-
     # lidar
     use_lidar = LaunchConfiguration("use_lidar")
     lidar_frame_id = LaunchConfiguration("lidar_frame_id")
@@ -205,18 +200,6 @@ def generate_launch_description():
         "use_odom",
         default_value="true",
         description="Start tribo_odom odom_publisher (/odom + TF odom->base_link)",
-    )
-
-    declare_use_ekf = DeclareLaunchArgument(
-        "use_ekf",
-        default_value="true",
-        description="Fuse odom+IMU via robot_localization EKF. ON: odom_publisher -> /odom_raw "
-                    "(TF off), ekf_node -> /odom + TF. OFF: odom_publisher -> /odom + TF (legacy).",
-    )
-    declare_ekf_params = DeclareLaunchArgument(
-        "ekf_params_file",
-        default_value=os.path.join(pkg_bringup, "param", "ekf.yaml"),
-        description="EKF parameter file (robot_localization)",
     )
 
     declare_use_lidar = DeclareLaunchArgument(
@@ -294,54 +277,28 @@ def generate_launch_description():
         "invert_rotation": True,
         # effective (slip-calibrated) track for odom yaw; overrides physical track in
         # robot_geom.yaml. 4-wheel skid-steer slips laterally on turns, so effective
-        # track > physical 0.70 m. With EKF on, /odom yaw comes from the IMU gyro
-        # (ekf.yaml), so this mainly affects /odom_raw and the use_ekf=false legacy path.
-        # Calibrated via `ros2 run tribo_odom rotation_calib` (IMU gyro ref).
+        # track > physical 0.70 m. This is the SOLE yaw source now (IMU/EKF removed
+        # 2026-07-15: board IMU gyro dies ~2.4 s into a sustained turn), so /odom yaw
+        # accuracy depends entirely on this value.
         # 2026-07-13: 0.873 -> 0.838 (tribo v2, motor_calib.yaml 적용 후 12V에서 2회 재현).
-        # 측정은 배터리 11V 이상에서만 유효하다 — 전압이 낮으면 토크 부족으로 바퀴가
-        # 헛돌아 track_true 가 3 m 대까지 튄다 (10.5V 측정 실패 사례).
+        # 참고: 라이다 실측 대비 휠이 회전을 ~5% 적게 봄 → 이 기체 실제 track 은 ~0.885
+        # 방향이나, 재캘리브 도구(rotation_calib) 제거로 0.838 고정. 필요 시 이 값만 조정.
         "track_width": 0.838,
     }
 
-    # EKF 사용 시: odom_publisher → /odom_raw (TF 끔). EKF가 /odom + TF 담당.
-    odom_node_with_ekf = Node(
+    # odom_publisher → /odom + TF(odom->base_link). 휠 오도메트리 단일 경로.
+    odom_node = Node(
         package="tribo_odom",
         executable="odom_publisher",
         name="tribo_odom",
         output="screen",
-        condition=IfCondition(AndSubstitution(use_odom, use_ekf)),
-        parameters=[
-            geom_file,
-            {**_odom_common_params,
-             "output_topic": "odom_raw",
-             "publish_tf": False},
-        ],
-    )
-
-    # EKF 미사용(legacy): odom_publisher → /odom + TF (이전 동작 유지)
-    odom_node_no_ekf = Node(
-        package="tribo_odom",
-        executable="odom_publisher",
-        name="tribo_odom",
-        output="screen",
-        condition=IfCondition(AndSubstitution(use_odom, NotSubstitution(use_ekf))),
+        condition=IfCondition(use_odom),
         parameters=[
             geom_file,
             {**_odom_common_params,
              "output_topic": "odom",
              "publish_tf": True},
         ],
-    )
-
-    # EKF (robot_localization): /odom_raw + /imu/data → 융합 → /odom + TF(odom->base_link)
-    ekf_node = Node(
-        package="robot_localization",
-        executable="ekf_node",
-        name="ekf_node",
-        output="screen",
-        condition=IfCondition(use_ekf),
-        parameters=[ekf_params_file],
-        remappings=[("odometry/filtered", "odom")],
     )
 
     sllidar_share = get_package_share_directory("sllidar_ros2")
@@ -366,16 +323,12 @@ def generate_launch_description():
             declare_sim_time,
 
             declare_use_odom,
-            declare_use_ekf,
-            declare_ekf_params,
             declare_use_lidar,
             declare_lidar_frame,
             declare_lidar_port,
 
             bringup_node,
-            odom_node_with_ekf,
-            odom_node_no_ekf,
-            ekf_node,
+            odom_node,
             lidar_launch,
             joint_state_pub,
             robot_state_pub,

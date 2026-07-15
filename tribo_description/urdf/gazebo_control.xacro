@@ -9,9 +9,9 @@
         <right_joint>rear_right_wheel_joint</right_joint>
 
         <!-- 물리 트랙은 0.50 (2*wheel_y) 이지만, 4륜 스키드 회전 슬립 보정을 위해 -->
-        <!-- 유효 트랙(effective)을 사용. odom(바퀴) 회전과 실제(IMU) 회전이 일치하도록 보정. -->
-        <!-- 검증 완료 - cmd wz 0.4/0.6/1.0 에서 odom/imu ratio = 1.0 ±2% (계통편차 없음) -->
-        <!-- 재보정 필요시 new = current * (odom 각속도 / imu 각속도) -->
+        <!-- 유효 트랙(effective)을 사용해 odom(바퀴) 회전이 실제 회전과 일치하도록 보정. -->
+        <!-- cmd wz 0.4/0.6/1.0 에서 회전 ratio 1.0 ±2% 검증(계통편차 없음). -->
+        <!-- 재보정 필요시 라이다 스캔으로 실제 회전각을 재어 new = current * (odom/실제). -->
         <wheel_separation>0.65</wheel_separation>
         <wheel_radius>0.05</wheel_radius>
 
