@@ -586,10 +586,18 @@ class TriboCalibrator(Node):
         # 1) Straight balance (forward) -> per-motor gain (방식 A)
         if fwd is not None:
             # ---- Forward per-motor gain (방식 A) ----
-            # 목표: 4모터 tick rate 를 그중 '최저' 모터에 맞춤. 게인이 항상 현재값
-            # 이하로만 내려가므로 PWM 포화가 없어 안전.
+            # 목표: 4모터 tick rate 를 그중 '최저' 모터에 맞춤.
             #   new_gain[i] = live_gain[i] * (min_rate / |rate_i|)
-            # live_gain 은 실행 중 bringup 에서 조회한 현재 적용 게인(폴백=current_*).
+            #
+            # ⚠️ 이 식만 쓰면 계수가 항상 <=1 이라 게인이 내려가기만 한다. 빠른 모터를
+            #    누르면 다음 반복에서 최저 모터의 순위가 바뀌고, 그러면 직전의 최저
+            #    모터에도 <1 이 곱해진다. 반복할수록 4개 게인이 모두 0 을 향해 깎여
+            #    로봇이 캘리브를 돌릴 때마다 약해진다 (실측: 최대 게인 0.73 -> 0.619).
+            #    토크가 사라지면 제자리 회전이 스크럽 마찰을 못 이겨 stall 하고,
+            #    그걸 rotate_pwm_min 으로 억지로 덮으면 전류가 튀어 전원이 트립된다.
+            #
+            # 그래서 균형(비율)은 유지한 채 최대 게인이 1.0 이 되도록 재정규화한다.
+            # 적어도 한 모터는 명령 PWM 을 100% 받으므로 토크를 버리지 않는다.
             abs_rates = [abs(r) for r in fwd.rates]
             eps = 1e-6
             min_rate = min(abs_rates)
@@ -605,9 +613,17 @@ class TriboCalibrator(Node):
                 )
             else:
                 gain_ok = True
-                new_gain = [
+                raw_gain = [
                     self.live_gain[i] * (min_rate / abs_rates[i]) for i in range(4)
                 ]
+                g_max = max(raw_gain)
+                if g_max > eps:
+                    new_gain = [g / g_max for g in raw_gain]   # 비율 유지, 최대=1.0
+                else:
+                    new_gain = raw_gain
+                    self.get_logger().warning(
+                        "[직진] 재정규화 실패(모든 게인이 0 에 가까움). 원값을 유지합니다."
+                    )
 
             # 불균형 지표: (max-min)/mean (0=완전 균형). converge_tol 미만이면 수렴.
             imbalance = (max_rate - min_rate) / mean_rate if mean_rate > eps else 0.0
