@@ -452,7 +452,20 @@ ros2 launch tribo_navigation map_building.launch.py
 - `laser_filters/scan_to_scan_filter_chain` (`/scan` → `/scan_filtered`)
 - `slam_toolbox` online sync (`config/slam_toolbox_mapping.yaml`)
 
-**③ 텔레옵으로 주행하며 매핑**
+**③ PC에서 맵 보기** (RViz)
+
+`map_building.launch.py`는 RViz를 띄우지 않으므로, 맵이 그려지는 과정을 보려면 PC에서 뷰어를 따로 실행합니다. (로봇 LCD에는 이 단계에서 RViz가 뜨지 않습니다 — LCD RViz 자동 표시는 Nav2 단계 전용입니다.)
+
+```bash
+# PC — /map, /scan, 로봇 모델을 map_building.rviz 설정으로 표시
+ros2 launch tribo_navigation map_view.launch.py
+```
+
+- 실시간으로 채워지는 맵을 보며 아직 안 그려진 곳을 향해 로봇을 몰면 됩니다.
+- 시뮬(Gazebo)이면 `use_sim_time:=true`를 붙이세요(안 그러면 TF 시간 불일치로 화면이 비거나 깨짐).
+- 순수 뷰어라 로봇 노드는 하나도 안 띄웁니다. 끄거나 재시작해도 SLAM에 영향 없습니다.
+
+**④ 텔레옵으로 주행하며 매핑**
 
 ```bash
 # 별도 터미널에서 (PC 권장)
@@ -461,7 +474,7 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
 > 너무 빠르거나 급회전하면 스캔 매칭이 깨집니다. 천천히, 겹치는 구간을 만들면서 한 바퀴 돌리세요.
 
-**④ 맵 저장**
+**⑤ 맵 저장**
 
 `map_saver_cli`는 **실행한 머신의 현재 경로**에 `<이름>.yaml` + `<이름>.pgm` 두 파일을 저장합니다. Nav2가 결국 **로봇에서** map을 로드하므로, 가능하면 **로봇에서 저장**하는 게 가장 간단합니다.
 
