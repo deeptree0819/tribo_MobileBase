@@ -123,7 +123,16 @@ class TriboBringupTribolib(Node):
         self.declare_parameter("battery_rate", 1.0)        # Hz (전압은 천천히 변함)
         self.declare_parameter("battery_full_v", 12.6)     # 3S 만충
         self.declare_parameter("battery_empty_v", 9.0)     # 3S 방전(0%)
-        self.declare_parameter("battery_warn_v", 10.5)     # 저전압 경고 임계
+        self.declare_parameter("battery_warn_v", 10.5)     # 저전압 경고 로그 임계
+        # 저전압 부저: v <= buzzer_low_v 면 buzzer_period_s 마다 buzzer_beep_ms 만큼 삐빅.
+        # buzzer_low_v <= 0 이면 부저 비활성화.
+        self.declare_parameter("buzzer_low_v", 10.0)       # 부저 임계 (V)
+        self.declare_parameter("buzzer_beep_ms", 300)      # 삐빅 길이 (ms)
+        self.declare_parameter("buzzer_period_s", 2.0)     # 삐빅 간격 (s)
+        # 저전압 강제 종료: v <= buzzer_low_v 가 low_batt_shutdown_s 초 연속 지속되면
+        # 모터를 세우고 bringup 을 종료한다(과방전/오작동 방지). 0 이면 비활성(부저만).
+        # 순간 전압 sag(부하 시 잠깐 강하)로 오종료되지 않게 연속 지속을 요구한다.
+        self.declare_parameter("low_batt_shutdown_s", 5.0)
 
         # ---- Read params ----
         self.port = str(self.get_parameter("port").value)
@@ -192,6 +201,13 @@ class TriboBringupTribolib(Node):
         self.battery_empty_v = float(self.get_parameter("battery_empty_v").value)
         self.battery_warn_v = float(self.get_parameter("battery_warn_v").value)
         self._last_batt_warn_t = 0.0
+        self.buzzer_low_v = float(self.get_parameter("buzzer_low_v").value)
+        self.buzzer_beep_ms = int(self.get_parameter("buzzer_beep_ms").value)
+        self.buzzer_period_s = float(self.get_parameter("buzzer_period_s").value)
+        self._last_buzz_t = 0.0
+        self.low_batt_shutdown_s = float(self.get_parameter("low_batt_shutdown_s").value)
+        self._low_batt_since = None   # 저전압 진입 시각 (연속 지속 측정용)
+        self._shutting_down = False
 
         # ---- Hardware bringup (TriboBase) ----
         self.base = TriboBase(
@@ -455,6 +471,40 @@ class TriboBringupTribolib(Node):
                 f"LOW BATTERY: {v:.2f} V (<= {self.battery_warn_v:.1f} V), {pct * 100:.0f}%"
             )
 
+        # 저전압 부저: buzzer_low_v 이하이면 buzzer_period_s 마다 짧게 삐빅.
+        # (v>1.0 은 배터리 미연결 0V 오검출 방지. beep 은 duration 후 자동 OFF 라 끌 필요 없음.)
+        low = self.buzzer_low_v > 0.0 and 1.0 < v <= self.buzzer_low_v
+        if low and (now_t - self._last_buzz_t) >= self.buzzer_period_s:
+            self._last_buzz_t = now_t
+            try:
+                self.base.beep(self.buzzer_beep_ms)
+            except Exception as e:
+                self.get_logger().warn(f"부저 명령 실패: {e}")
+
+        # 저전압 강제 종료: 저전압이 low_batt_shutdown_s 초 연속 지속되면 종료.
+        if self.low_batt_shutdown_s > 0.0 and low:
+            if self._low_batt_since is None:
+                self._low_batt_since = now_t
+            held = now_t - self._low_batt_since
+            if held >= self.low_batt_shutdown_s and not self._shutting_down:
+                self.get_logger().error(
+                    f"저전압 {v:.2f} V 가 {self.low_batt_shutdown_s:.0f}s 연속 지속 "
+                    f"→ 모터 정지 후 bringup 종료 (과방전 방지)"
+                )
+                try:
+                    self._send_stop()
+                except Exception:
+                    pass
+                try:
+                    self.base.beep(2000)   # 종료 경고음 (길게)
+                except Exception:
+                    pass
+                # main 루프가 감지해 정상 종료(destroy_node/close). 콜백에서 직접
+                # rclpy.shutdown() 하면 main finally 와 이중 호출되어 에러난다.
+                self._shutting_down = True
+        else:
+            self._low_batt_since = None   # 전압 회복 시 카운터 리셋
+
     # ---------- encoder polling ----------
     def _enc_timer_cb(self):
         """
@@ -532,10 +582,15 @@ def main(args=None):
     rclpy.init(args=args)
     node = TriboBringupTribolib()
     try:
-        rclpy.spin(node)
+        # 저전압 강제 종료(_shutting_down) 시 spin 을 빠져나와 정상 정리한다.
+        while rclpy.ok() and not node._shutting_down:
+            rclpy.spin_once(node, timeout_sec=0.1)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -124,7 +124,9 @@ class TriboBase:
         self._car_type = car_type & 0xFF
 
         # 시리얼 포트 열기
-        self._ser = serial.Serial(port, baudrate)
+        # timeout=0.1: read 가 주기적으로 리턴해 rx_loop 가 정지 신호(_uart_thread_state)를
+        # 확인할 수 있게 한다(없으면 블로킹 read 라 close 시 스레드가 안 빠져나가 race 발생).
+        self._ser = serial.Serial(port, baudrate, timeout=0.1)
         if self._ser.is_open:
             print(f"TriboBase: serial opened on {port} @ {baudrate}")
         else:
@@ -183,8 +185,9 @@ class TriboBase:
             return
 
         def rx_loop():
+          try:
             self._ser.reset_input_buffer()
-            while True:
+            while self._uart_thread_state != 2:
                 header = self._ser.read(1)
                 if not header:
                     continue
@@ -230,6 +233,12 @@ class TriboBase:
                     continue
 
                 self._handle_report(func, data)
+          except Exception:
+            # close() 로 시리얼이 닫히면 read 가 예외를 낸다. 종료(state==2) 중이면
+            # 조용히 빠져나가고, 그 외의 예상치 못한 예외만 표면화한다.
+            if self._uart_thread_state != 2:
+                import traceback
+                traceback.print_exc()
 
         self._rx_thread = threading.Thread(target=rx_loop, daemon=True)
         self._rx_thread.start()
@@ -551,7 +560,13 @@ class TriboBase:
     # ---------------------- 종료 처리 ----------------------
 
     def close(self) -> None:
-        """시리얼 포트 닫기."""
+        """백그라운드 리더를 멈추고 시리얼 포트 닫기."""
+        # 먼저 rx_loop 에 정지 신호(state=2) → join 으로 스레드가 read 를 끝내고
+        # 빠져나가길 기다린 뒤 시리얼을 닫는다(닫힌 포트 read race 방지).
+        self._uart_thread_state = 2
+        t = self._rx_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=1.0)
         if self._ser and self._ser.is_open:
             self._ser.close()
             print("TriboBase: serial closed")

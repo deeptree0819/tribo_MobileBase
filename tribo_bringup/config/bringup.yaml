@@ -93,4 +93,12 @@ tribo_bringup:
     battery_rate: 1.0
     battery_full_v: 12.6    # 3S full
     battery_empty_v: 9.0    # 3S empty (0%)
-    battery_warn_v: 10.5    # low-battery warning threshold
+    battery_warn_v: 10.5    # low-battery warning threshold (log only)
+
+    # Low-battery buzzer: beep buzzer_beep_ms every buzzer_period_s while v <= buzzer_low_v.
+    # Set buzzer_low_v <= 0 to disable. beep auto-stops after its duration (no explicit off).
+    buzzer_low_v: 10.0      # V — start beeping below this
+    buzzer_beep_ms: 300     # ms per beep
+    buzzer_period_s: 2.0    # s between beeps
+    # 저전압이 이 시간(s) 연속 지속되면 모터 정지 후 bringup 종료. 0 이면 비활성(부저만).
+    low_batt_shutdown_s: 5.0
