@@ -8,5 +8,10 @@
 /**:
   ros__parameters:
     track_width: 0.52
-    wheel_radius: 0.04
+    # 실측 2026-07-16 (기체 7b6a, 라이다 벽거리 vs odom): 0.040 은 12% 과소였다.
+    # 전진 실제/odom=1.117, 후진 1.124 (방향 일치) → 0.040 × 1.121 = 0.0448.
+    # 바퀴는 기체별이 아니라 모델 공통이므로 공유값으로 둔다.
+    # ⚠️ wheel_radius 와 ticks_per_rev 는 곱으로만 작용(거리=ticks/tpr×2πR)하므로
+    #    둘 중 어느 쪽이 틀려도 같은 증상이다. 여기서는 R 로 흡수했다.
+    wheel_radius: 0.0448
     ticks_per_rev: 4320
