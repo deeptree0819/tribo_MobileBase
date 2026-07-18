@@ -281,9 +281,17 @@ def generate_launch_description():
         # 2026-07-15: board IMU gyro dies ~2.4 s into a sustained turn), so /odom yaw
         # accuracy depends entirely on this value.
         # 2026-07-13: 0.873 -> 0.838 (tribo v2, motor_calib.yaml 적용 후 12V에서 2회 재현).
-        # 참고: 라이다 실측 대비 휠이 회전을 ~5% 적게 봄 → 이 기체 실제 track 은 ~0.885
-        # 방향이나, 재캘리브 도구(rotation_calib) 제거로 0.838 고정. 필요 시 이 값만 조정.
-        "track_width": 0.838,
+        # 2026-07-18: 0.838 -> 0.939. wheel_radius 를 0.040->0.0448 (×1.12) 올리자 회전
+        # odom 이 정확히 그만큼 부풀려졌다(회전=(d_r-d_l)/track, d∝R). 직진은 R 만으로
+        # 결정돼 0.0448 이 맞고, 회전 복구는 track 을 같은 배수로: 0.838×1.12=0.939.
+        # (R 은 곱으로만 작용 → track 도 함께 스케일해야 R/track 비율이 유지됨.)
+        # 2026-07-18: 라이다-독립 검증(제자리 6바퀴, 출발선 복귀 오차)로 track 확정.
+        #   0.939→90° undershoot, 0.959→80° overshoot, 0.981→100° overshoot.
+        #   제로크로싱은 0.939~0.959 사이 → 0.950 확정(보간 0.949, 3역산 평균 0.948).
+        #   ⚠️ 눈측정 한계로 유효 분해능 ~±3%(0.92~0.98 구분 불가). 이 이상 튜닝 무의미.
+        #   ⚠️ SHARED 값: 이 캘리브는 기체 76c02a 에서 함. 기체별 track 은 다를 수 있고
+        #      (7b6a 미확정), per-unit override 경로가 아직 없음 → 다른 기체는 이 방법으로 재검증.
+        "track_width": 0.950,
     }
 
     # odom_publisher → /odom + TF(odom->base_link). 휠 오도메트리 단일 경로.
