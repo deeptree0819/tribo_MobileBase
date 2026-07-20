@@ -17,8 +17,9 @@ from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 
-def yaw_to_quaternion(yaw: float):
-    """Z축 회전 yaw(rad) -> (z, w) 쿼터니언 성분."""
+def yaw_to_quaternion(yaw_deg: float):
+    """Z축 회전 yaw(deg) -> (z, w) 쿼터니언 성분."""
+    yaw = math.radians(yaw_deg)
     return math.sin(yaw * 0.5), math.cos(yaw * 0.5)
 
 
@@ -29,7 +30,7 @@ class GoalSender(Node):
         # 목표 좌표 (map 프레임 기준)
         self.declare_parameter("x", 0.0)
         self.declare_parameter("y", 0.0)
-        self.declare_parameter("yaw", 0.0)
+        self.declare_parameter("yaw", 0.0)   # 단위: degree (내부에서 radian 변환)
         self.declare_parameter("frame_id", "map")
         # Nav2 활성화 대기 여부 (이미 떠 있으면 빠르게 통과)
         self.declare_parameter("wait_for_nav2", True)
@@ -70,7 +71,7 @@ class GoalSender(Node):
         goal = self.build_goal()
         self.get_logger().info(
             f"목표 전송: x={self.x:.3f}, y={self.y:.3f}, "
-            f"yaw={self.yaw:.3f} rad (frame={self.frame_id})"
+            f"yaw={self.yaw:.3f} deg (frame={self.frame_id})"
         )
         self.navigator.goToPose(goal)
 
