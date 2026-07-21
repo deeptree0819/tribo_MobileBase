@@ -8,7 +8,11 @@
 # 사용법:
 #   ./scripts/find_tribos.sh              # 현재 서브넷 자동 탐지
 #   ./scripts/find_tribos.sh 172.16.200   # 서브넷 직접 지정
-set -uo pipefail
+#
+# NOTE: 일부러 `set -u`(nounset)를 쓰지 않는다. 실수로 이 파일을 실행이 아니라
+#       source 하면 그 옵션이 호출한 셸에 남고, 이후 colcon 의 setup.bash 가
+#       "COLCON_CURRENT_PREFIX: unbound variable" 로 깨진다(2026-07-20 실제 발생).
+#       변수는 아래처럼 ${VAR:-} 로 개별 방어한다.
 
 USER_NAME="${TRIBO_USER:-tribo}"
 
