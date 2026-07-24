@@ -88,9 +88,13 @@ controller_server:
 
     # Progress checker parameters
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
+      # SimpleProgressChecker 는 "병진"만 본다. 제자리 회전을 길게 하면(180° ≈ 6.3s
+      # @0.5rad/s, shim 진입 대기 포함) 진전 없음으로 오판해 주행을 실패시킨다.
+      # PoseProgressChecker 는 회전각도 진전으로 인정한다.
+      plugin: "nav2_controller::PoseProgressChecker"
       required_movement_radius: 0.5
-      movement_time_allowance: 10.0
+      required_movement_angle: 0.5
+      movement_time_allowance: 20.0
     # Goal checker parameters
     #precise_goal_checker:
     #  plugin: "nav2_controller::SimpleGoalChecker"
@@ -103,11 +107,35 @@ controller_server:
       xy_goal_tolerance: 0.35
       yaw_goal_tolerance: 0.35
     FollowPath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # RPP 단독은 헤딩 오차를 "원호"로 흡수해서, 회전해야 할 코너에서 회전+직진을
+      # 동시에 하다가 벽에 스친다. RotationShim 으로 감싸 헤딩이 어긋나면 선속도 0 으로
+      # 제자리 회전만 먼저 하고, 정렬된 뒤에 RPP 로 넘긴다.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # 경로 시작 방향과 헤딩 오차가 이 값을 넘으면 제자리 회전 모드로 진입하고,
+      # 이 값 이내로 들어와야 RPP 로 인계한다. 즉 "얼마나 정확히 맞추고 출발하느냐".
+      # 0.30(17°) -> 0.45(26°): 0.30 은 너무 민감해 작은 코너마다 shim 이 개입 →
+      # 짧은 제자리회전-짧은 직진이 잘게 반복돼 비효율적이었다. 진짜 큰 방향전환에서만
+      # 제자리 회전하도록 완화. rotate_to_heading_min_angle(0.70)보다 반드시 작아야 함.
+      angular_dist_threshold: 0.45
+      # 경로 위에서 이만큼 앞의 점을 목표 헤딩으로 삼는다. 짧을수록 코너에 민감.
+      forward_sampling_distance: 0.4
+      # 목표 도착 시 최종 yaw 도 제자리 회전으로 맞춘다.
+      rotate_to_goal_heading: true
+      # 실측 제자리 회전 천장 ~0.6 rad/s (2026-07-13 v2). 그 이상 명령해도 안 나온다.
+      rotate_to_heading_angular_vel: 0.5
+      max_angular_accel: 3.2
+      # 회전 중 충돌 예측 구간. 회전 반경이 작아 1.0s 면 충분.
+      simulate_ahead_time: 1.0
+      closed_loop: false                   # odom 피드백 대신 open-loop (velocity_smoother 도 OPEN_LOOP)
+
+      # --- 이하 primary_controller(RPP) 파라미터 (같은 네임스페이스에서 읽는다) ---
       desired_linear_vel: 0.2
-      lookahead_dist: 0.6
-      min_lookahead_dist: 0.3
-      max_lookahead_dist: 0.9
+      # 0.45 -> 0.60: 당근점이 가까우면 경로 곡률 변화에 과민해 방향을 잦게 바꿔
+      # 회전-직진이 잘게 쪼개졌다. 멀리 봐서 부드럽게 추종하도록 되돌림.
+      lookahead_dist: 0.60
+      min_lookahead_dist: 0.25
+      max_lookahead_dist: 0.8
       lookahead_time: 1.5
       transform_tolerance: 0.1
       use_velocity_scaled_lookahead_dist: false
@@ -118,16 +146,21 @@ controller_server:
       use_regulated_linear_velocity_scaling: true
       use_fixed_curvature_lookahead: false
       curvature_lookahead_dist: 0.25
-      use_cost_regulated_linear_velocity_scaling: false
+      # false -> true: 장애물(벽) 근처에서 선속도를 줄여 스치는 것을 막는다.
+      use_cost_regulated_linear_velocity_scaling: true
+      cost_scaling_dist: 0.4
+      cost_scaling_gain: 1.0
+      inflation_cost_scaling_factor: 3.0   # local_costmap 의 cost_scaling_factor 와 반드시 일치
       regulated_linear_scaling_min_radius: 0.9
       regulated_linear_scaling_min_speed: 0.15
       use_rotate_to_heading: true
       allow_reversing: false
-      rotate_to_heading_min_angle: 0.785
-      max_angular_accel: 3.2
-      # 1.0 -> 0.5: 로봇이 낼 수 있는 제자리 회전은 ~0.6 rad/s 가 한계다(2026-07-13 v2 실측).
-      # 1.0 을 명령하면 실제로는 천장에 눌려 돌므로 Nav2 의 회전 소요시간 예측이 어긋난다.
-      rotate_to_heading_angular_vel: 0.5
+      # 0.35(20°) -> 0.70(40°): 20° 는 너무 낮아 완만한 코너마다 선속도 0 으로 멈춰
+      # 제자리 회전 → 짧은 회전-짧은 직진이 반복돼 비효율적이었다. 40° 이상의 큰 코너만
+      # 제자리 회전하고, 그 미만은 원호로 부드럽게 직진하며 돈다.
+      # shim 의 angular_dist_threshold(0.45)보다 반드시 커야 한다. 작으면 shim 이
+      # 인계한 직후 RPP 가 다시 제자리 회전에 들어가 핑퐁이 난다.
+      rotate_to_heading_min_angle: 0.70
       max_robot_pose_search_dist: 10.0
 
 local_costmap:
@@ -145,8 +178,11 @@ local_costmap:
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
+        # RPP 의 inflation_cost_scaling_factor 와 값이 같아야 비용 기반 감속이 맞는다.
         cost_scaling_factor: 3.0
-        inflation_radius: 0.25
+        # 0.40 -> 0.45: 벽을 아슬아슬하게 지나 안전거리를 더 키움.
+        # 벽 스탠드오프 robot_radius(0.22) 기준 0.23m (통로 1m 이상이면 경로 막지 않음).
+        inflation_radius: 0.45
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -202,8 +238,11 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 15.0
-        inflation_radius: 0.25
+        # 15.0 은 감쇠가 극단적으로 가팔라 플래너가 벽에 밀착한 경로를 뽑았다.
+        # 3.0 이면 완만한 경사가 생겨 통로 중앙으로 붙는다.
+        cost_scaling_factor: 3.0
+        # 0.40 -> 0.45: 안전거리 상향(local 과 일치). 플래너가 벽에서 더 떨어진 경로 생성.
+        inflation_radius: 0.45
       always_send_full_costmap: True
 
 # The yaml_filename does not need to be specified since it going to be set by defaults in launch.

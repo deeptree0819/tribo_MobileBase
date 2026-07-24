@@ -10,6 +10,8 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_rotation_shim_controller</exec_depend>
+  <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>tribo_bringup</exec_depend>
   <exec_depend>tribo_odom</exec_depend>
