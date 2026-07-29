@@ -17,3 +17,7 @@ log/
 # Per-robot auto-generated motor gain calibration (see motor_calib.py). Each
 # robot's 4-motor deviation differs, so this is a machine-local override file.
 tribo_bringup/config/motor_calib.yaml
+
+# Ad-hoc map captures pulled off a specific robot (binary pgm; not referenced
+# by any launch/param file). Keep maps out of the repo.
+maps_from_*/
