@@ -124,7 +124,9 @@ controller_server:
       rotate_to_goal_heading: true
       # 실측 제자리 회전 천장 ~0.6 rad/s (2026-07-13 v2). 그 이상 명령해도 안 나온다.
       rotate_to_heading_angular_vel: 0.5
-      max_angular_accel: 3.2
+      # 3.2 -> 1.5: 회전 급가속이 시작 전류 피크를 키워 저전압 컷오프를 유발했다.
+      # 완만하게 밀어 전류 피크를 낮춘다(회전 시작이 약간 느려지는 대신 컷오프 방지).
+      max_angular_accel: 1.5
       # 회전 중 충돌 예측 구간. 회전 반경이 작아 1.0s 면 충분.
       simulate_ahead_time: 1.0
       closed_loop: false                   # odom 피드백 대신 open-loop (velocity_smoother 도 OPEN_LOOP)
@@ -306,7 +308,8 @@ behavior_server:
     # min 0.4 는 최소 회전속도(0.19)보다 위라 그대로 둔다 — 더 낮추면 스톨한다.
     max_rotational_vel: 0.5
     min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    # 3.2 -> 1.5: 회전 급가속 시작 전류 피크가 저전압 컷오프 유발 → 완만하게.
+    rotational_acc_lim: 1.5
 
 waypoint_follower:
   ros__parameters:
@@ -351,8 +354,10 @@ velocity_smoother:
     # (2026-07-13 tribo v2 실측. 그 이상을 명령해도 물리적으로 안 나온다.)
     max_velocity: [0.25, 0.0, 0.55]
     min_velocity: [-0.25, 0.0, -0.55]
-    max_accel: [2.5, 0.0, 3.2]
-    max_decel: [-2.5, 0.0, -3.2]
+    # 각가속(3번째=yaw) 3.2 -> 1.5: 회전 급가속 전류 피크가 저전압 컷오프 유발.
+    # 직진 가속(2.5)은 유지, 회전만 완만하게.
+    max_accel: [2.5, 0.0, 1.5]
+    max_decel: [-2.5, 0.0, -1.5]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
