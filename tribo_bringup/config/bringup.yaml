@@ -9,7 +9,18 @@ tribo_bringup:
 
     # Motion interface
     use_motion_mode: false
-    max_lin_vel: 0.50
+    # 2026-07-29 메카넘(82mm) 실측 후 0.50 -> 0.85 (기체 76c02a, pwm_min 20 기준).
+    # ⚠️ 이 값은 "최고속"이 아니라 정규화 분모다(duty = |v_wheel| / max_lin_vel).
+    #    실측 최고속은 듀티 100%에서 0.443 m/s 로, 오히려 0.50 보다 낮다.
+    #    그런데 응답이 오목(저듀티 가파름/고듀티 완만)해서 천장값을 그대로 넣으면
+    #    중속 대역이 더 어긋난다 — 분모를 줄이면 듀티가 올라 더 빨라지기 때문(아래 주석).
+    # 실측 v_steady: duty 20%->0.216, 50%->0.322, 80%->0.412, 100%->0.443 m/s.
+    # 0.85 는 Nav2 동작대역(0.2~0.3)에서 명령=실제가 되도록 역산한 값이다:
+    #    0.20->0.23, 0.25->0.25, 0.30->0.27 (오차 10% 이내).
+    # ⚠️ 대신 0.35 이상은 물리적으로 못 낸다 → nav2_params 의 속도 상한을 그에 맞출 것.
+    # ⚠️ 오프셋이 있는 응답이라 단일 배율로는 전 대역을 맞출 수 없다. 정확히 맞추려면
+    #    회전의 rot_lin 과 같은 역아핀 선형화가 직진에도 필요하다(미구현).
+    max_lin_vel: 0.85
     max_ang_vel: 2.00
     turn_scale: 1.00
 
@@ -44,7 +55,13 @@ tribo_bringup:
     invert_m4: false
 
     # Minimum PWM to overcome static friction (0~100)
-    pwm_min_percent: 35.0
+    # 2026-07-29 메카넘(82mm) 교체 후 35.0 -> 20.0.
+    # 메카넘은 구름저항이 낮아 35% 바닥이 이미 0.28 m/s 를 냈다. 0이 아닌 어떤 저속을
+    # 명령해도 전부 이 바닥으로 클램프돼 최저 달성속도가 0.28 이 되고, Nav2 가 요구하는
+    # 0.2~0.25 는 물리적으로 추종 불가능했다(명령 0.15에 실제 0.28 이 나온 원인).
+    # 20 으로 낮춰 최저속을 0.216 m/s 로 내렸고, 이 값에서도 스톨 없이 직진했다
+    # (yaw 드리프트 -0.15°). 더 낮추면 정지마찰을 못 이겨 스톨할 수 있어 미탐색.
+    pwm_min_percent: 20.0
 
     # Maximum PWM duty (0~100) — caps peak motor current.
     # ⚠️ Do NOT try to "slow the robot down" by lowering max_lin_vel. Normalization is
