@@ -122,8 +122,13 @@ controller_server:
       forward_sampling_distance: 0.4
       # 목표 도착 시 최종 yaw 도 제자리 회전으로 맞춘다.
       rotate_to_goal_heading: true
-      # 실측 제자리 회전 천장 ~0.6 rad/s (2026-07-13 v2). 그 이상 명령해도 안 나온다.
-      rotate_to_heading_angular_vel: 0.5
+      # 2026-07-29 메카넘(82mm) 실측: 0.5 -> 0.37.
+      # 회전은 명령을 추종하지 않는다 — rotate_pwm_min(35) 바닥이 속도를 결정한다.
+      # 명령 wz 0.4 의 자연 듀티는 0.4×0.71/2/0.85 = 16.7% 라 바닥에 클램프되고,
+      # 바닥이 안 걸리려면 명령이 0.84 rad/s 를 넘어야 하는데 Nav2 는 거기까지 안 간다.
+      # 즉 이 대역에서 회전은 사실상 단일 속도 0.367 rad/s(실측)다. 0.5 를 적어두면
+      # 컨트롤러가 낼 수 없는 속도로 계획하므로 실측값을 적는다.
+      rotate_to_heading_angular_vel: 0.37
       # 3.2 -> 1.5: 회전 급가속이 시작 전류 피크를 키워 저전압 컷오프를 유발했다.
       # 완만하게 밀어 전류 피크를 낮춘다(회전 시작이 약간 느려지는 대신 컷오프 방지).
       max_angular_accel: 1.5
@@ -154,7 +159,9 @@ controller_server:
       cost_scaling_gain: 1.0
       inflation_cost_scaling_factor: 3.0   # local_costmap 의 cost_scaling_factor 와 반드시 일치
       regulated_linear_scaling_min_radius: 0.9
-      regulated_linear_scaling_min_speed: 0.15
+      # 2026-07-29: 0.15 -> 0.22. pwm_min_percent(20) 바닥이 내는 최저 직진속도가
+      # 실측 0.216 m/s 라, 0.15 로 줄이라고 해봐야 로봇은 0.216 으로 간다.
+      regulated_linear_scaling_min_speed: 0.22
       use_rotate_to_heading: true
       allow_reversing: false
       # 0.35(20°) -> 0.70(40°): 20° 는 너무 낮아 완만한 코너마다 선속도 0 으로 멈춰
@@ -305,9 +312,11 @@ behavior_server:
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
     # 1.0 -> 0.5: 실측 회전 천장 ~0.6 rad/s (2026-07-13 tribo v2).
-    # min 0.4 는 최소 회전속도(0.19)보다 위라 그대로 둔다 — 더 낮추면 스톨한다.
-    max_rotational_vel: 0.5
-    min_rotational_vel: 0.4
+    # 2026-07-29 메카넘: 0.5 -> 0.37. rotate_pwm_min(35) 바닥이 만드는 단일 회전속도가
+    # 실측 0.367 rad/s 다. min 도 0.4 -> 0.35 — 구 주석의 "최소 0.19"는 고무바퀴
+    # 기준이고, 지금은 바닥 때문에 0.367 밑으로는 애초에 못 내려간다.
+    max_rotational_vel: 0.37
+    min_rotational_vel: 0.35
     # 3.2 -> 1.5: 회전 급가속 시작 전류 피크가 저전압 컷오프 유발 → 완만하게.
     rotational_acc_lim: 1.5
 
@@ -352,8 +361,11 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     # 각속도 상한 2.0 -> 0.55: 로봇의 실측 제자리 회전 천장이 ~0.6 rad/s 다.
     # (2026-07-13 tribo v2 실측. 그 이상을 명령해도 물리적으로 안 나온다.)
-    max_velocity: [0.25, 0.0, 0.55]
-    min_velocity: [-0.25, 0.0, -0.55]
+    # 2026-07-29 메카넘 실측으로 yaw 0.55 -> 0.37 (rotate_pwm_min 바닥이 만드는 단일
+    # 회전속도 0.367). 직진 0.25 는 유지 — 명령 0.25 에 실제 0.257 로 잘 추종한다
+    # (max_lin_vel 0.85 로 맞춤). 단 최저 직진속도가 0.216 이라 그 밑은 못 낸다.
+    max_velocity: [0.25, 0.0, 0.37]
+    min_velocity: [-0.25, 0.0, -0.37]
     # 각가속(3번째=yaw) 3.2 -> 1.5: 회전 급가속 전류 피크가 저전압 컷오프 유발.
     # 직진 가속(2.5)은 유지, 회전만 완만하게.
     max_accel: [2.5, 0.0, 1.5]
