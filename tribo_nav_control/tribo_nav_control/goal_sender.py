@@ -64,9 +64,16 @@ class GoalSender(Node):
     def run(self) -> int:
         """주행 실행. 종료 코드(0=성공) 반환."""
         if self.wait_for_nav2:
-            self.get_logger().info("Nav2 활성화 대기 중 (waitUntilNav2Active)...")
-            self.navigator.waitUntilNav2Active()
-            self.get_logger().info("Nav2 활성화 확인됨.")
+            # ⚠️ BasicNavigator.waitUntilNav2Active() 를 쓰지 않는다.
+            #    내부의 _waitForInitialPose() 가 amcl_pose 를 받을 때까지 self.initial_pose 를
+            #    /initialpose 로 발행하는데, setInitialPose() 를 부른 적이 없으면 그 값이
+            #    기본 PoseStamped() = 맵 원점(0,0,0) 이다. 즉 실행할 때마다 RViz 등으로
+            #    잡아둔 amcl 로컬라이제이션을 원점으로 리셋해 버린다(2026-07-20 실측 확인).
+            #    goToPose() 도 내부에서 이 서버를 기다리므로, 액션 서버만 기다리면 충분하다.
+            self.get_logger().info("Nav2(navigate_to_pose) 액션 서버 대기 중...")
+            while not self.navigator.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+                self.get_logger().info("navigate_to_pose 서버 대기 중...")
+            self.get_logger().info("Nav2 준비 확인됨 (초기포즈는 건드리지 않음).")
 
         goal = self.build_goal()
         self.get_logger().info(
