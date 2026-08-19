@@ -194,10 +194,25 @@ class TriboCalibrator(Node):
         self.declare_parameter("odom_topic", "/odom")
 
         # motion for test
-        self.declare_parameter("test_vx", 0.20)          # m/s
+        # ⚠️ 0.20 은 낮다. duty = pwm_min + (vx/max_lin_vel)*gain*(pwm_max-pwm_min) 이라
+        #    pwm_min(20%) 이 고정 오프셋으로 깔린다. vx=0.20, max_lin_vel=0.85 이면
+        #    gain 이 좌우하는 몫은 duty 의 1/3 도 안 되고, 게다가 duty→속도 응답이
+        #    오목해서 저듀티에서 더 둔하다. 2026-08-19 실측에서 gain_m4 를 0.50→0.42
+        #    (-16%) 로 낮췄는데 실제 tick rate 는 0.5% 밖에 안 줄었다. 이 상태로는
+        #    수렴 루프가 보정량의 ~1/7 만 반영해 tol 아래로 못 내려간다.
+        #    0.35 는 결과 duty 가 Nav2 동작대역(38~48%)에 들어오도록 고른 값이다.
+        self.declare_parameter("test_vx", 0.35)          # m/s
         self.declare_parameter("test_wz", 1.00)          # rad/s (command)
-        self.declare_parameter("run_time", 1.5)          # seconds each motion segment
-        self.declare_parameter("stop_time", 0.8)         # seconds between segments
+        # ⚠️ 이 캘리브는 "바퀴를 든 상태"로 돌린다. 무부하 바퀴는 (a) 정상속도에
+        #    도달하는 데 시간이 걸리고 (b) 명령을 끊어도 관성으로 한참 공회전한다.
+        #    2026-08-19 실측(82mm→100mm 교체 후 5회 반복)에서 run_time=1.5s 는
+        #    가속 구간만 재고 끝나 stop 구간 코스팅 속도가 주행 구간 평균의 2.5배로
+        #    나왔다. 즉 gain 이 "정상속도"가 아니라 "가속도"에 맞춰 피팅되고 있었다.
+        #    다음 구간이 시작될 때 이전 회전이 남아 있어 backward/rotate_right 도 오염된다.
+        #    구간을 늘려 정상속도가 평균을 지배하게 하고, stop 구간에서 실제로 멈추게 한다.
+        #    검증법: stop 구간 rate 가 0 근처로 떨어지는지 로그로 확인할 것.
+        self.declare_parameter("run_time", 4.0)          # seconds each motion segment
+        self.declare_parameter("stop_time", 3.0)         # seconds between segments
         self.declare_parameter("pub_rate", 20.0)         # cmd_vel publish rate (Hz)
 
         # current bringup settings (for computing "new = current * ratio")
@@ -357,13 +372,25 @@ class TriboCalibrator(Node):
         e = [int(msg.data[1]), int(msg.data[2]), int(msg.data[3]), int(msg.data[4])]
         t = self._now()
 
-        if self._enc_prev is None:
-            self._enc_prev = e
-            self._enc_prev_t = t
-
         # if a segment is active, keep last encoder snapshot
         if self._seg_active:
             self._seg_end_enc = e
+
+        # ⚠️ 2026-08-19 버그 수정. 예전에는 아래 대입이 `if self._enc_prev is None:`
+        #    안에 있어서 _enc_prev 가 "노드 기동 후 첫 샘플"에 영구히 고정됐다.
+        #    _start_segment 가 _seg_start_enc = _enc_prev 로 잡으므로, 모든 구간의
+        #    d_ticks 가 "구간 델타"가 아니라 "실행 시작부터의 누적"이 되고,
+        #    rate = 누적 / 구간길이 라는 무의미한 값이 나왔다.
+        #    증상: stop 구간 rate 가 주행 구간보다 크게 나오고(stop3 가 rotate_left
+        #    의 2.5배), backward 가 forward 와 같은 부호로 찍히며, rotate_right 의
+        #    좌우 부호가 rotate_left 와 동일하게 보인다. 그 결과 아래 값이 전부 쓰레기:
+        #      - gain_left_rev_factor / gain_right_rev_factor
+        #      - "전진인데 좌/우 tick 부호가 기대와 다릅니다" 경고
+        #    forward 만 우연히 정상이었다(직전 stop0 에서 아무것도 안 움직여
+        #    시작 누적이 0 이므로 누적 == 구간 델타). 즉 과거 gain_m* 결과 자체는
+        #    유효했고, 나머지 추천값만 오염돼 있었다.
+        self._enc_prev = e
+        self._enc_prev_t = t
 
     def _cb_odom(self, msg: Odometry):
         q = msg.pose.pose.orientation

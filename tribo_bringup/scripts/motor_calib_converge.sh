@@ -21,7 +21,15 @@ set -uo pipefail
 ROS_DISTRO_SETUP="/opt/ros/jazzy/setup.bash"
 WS="${WS:-$HOME/tribo_ws}"
 MAX_ITER="${MAX_ITER:-5}"
-TOL="${TOL:-0.05}"
+# 2026-08-19: 0.05 -> 0.06. 반복 측정 재현성이 3~5% 라 tol 0.05 는 노이즈 바닥보다
+# 낮아 구조적으로 도달 불가였다(5회 전부 NOT_CONVERGED, imbalance 0.061~0.075 에서
+# 진동하며 gain 만 표류). tol 을 노이즈보다 살짝 위로 둔다.
+TOL="${TOL:-0.06}"
+# 무부하(바퀴 든 상태) 가감속을 감안한 구간 길이. motor_calib.py 의 기본값 주석 참고.
+RUN_TIME="${RUN_TIME:-4.0}"
+STOP_TIME="${STOP_TIME:-3.0}"
+# duty 가 pwm_min 오프셋에 눌리지 않도록 충분히 큰 시험 속도. motor_calib.py 주석 참고.
+TEST_VX="${TEST_VX:-0.35}"
 ENC_TIMEOUT="${ENC_TIMEOUT:-20}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-20}"
 
@@ -39,6 +47,7 @@ cat <<'BANNER'
 =============================================================================
 BANNER
 echo "  WS=$WS  MAX_ITER=$MAX_ITER  TOL=$TOL  ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
+echo "  RUN_TIME=$RUN_TIME  STOP_TIME=$STOP_TIME  TEST_VX=$TEST_VX"
 echo "  CALIB_YAML=$CALIB_YAML"
 echo
 
@@ -141,6 +150,9 @@ for (( iter=1; iter<=MAX_ITER; iter++ )); do
   CALIB_OUT="$(ros2 run tribo_bringup motor_calib --ros-args \
       -p write_yaml:=true \
       -p converge_tol:="$TOL" \
+      -p run_time:="$RUN_TIME" \
+      -p stop_time:="$STOP_TIME" \
+      -p test_vx:="$TEST_VX" \
       -p calib_yaml_path:="$CALIB_YAML" 2>&1)" || true
   echo "$CALIB_OUT"
 
