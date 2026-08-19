@@ -123,6 +123,12 @@ controller_server:
       # 목표 도착 시 최종 yaw 도 제자리 회전으로 맞춘다.
       rotate_to_goal_heading: true
       # 2026-07-29 메카넘(82mm) 실측: 0.5 -> 0.37.
+      # ⚠️ 아래 "회전은 명령을 추종하지 않는다"는 2026-08-19 부로 더 이상 사실이 아니다.
+      #    기체 7b6a + 100mm 메카넘에서 rotate_pwm_min 을 50->25 로 내리고 rot_lin
+      #    (역아핀 선형화)을 실측 재피팅한 뒤로 명령 0.2~0.55 전 구간이 2% 이내로
+      #    추종된다(0.37 명령 -> 실측 0.361). 0.37 이라는 값 자체는 유지해도 되지만
+      #    이제는 "낼 수 있는 유일한 속도"가 아니라 "고른 속도"다.
+      # --- 이하 82mm/76c02a 시절 기록 ---
       # 회전은 명령을 추종하지 않는다 — rotate_pwm_min(35) 바닥이 속도를 결정한다.
       # 명령 wz 0.4 의 자연 듀티는 0.4×0.71/2/0.85 = 16.7% 라 바닥에 클램프되고,
       # 바닥이 안 걸리려면 명령이 0.84 rad/s 를 넘어야 하는데 Nav2 는 거기까지 안 간다.
@@ -146,7 +152,11 @@ controller_server:
       lookahead_time: 1.5
       transform_tolerance: 0.1
       use_velocity_scaled_lookahead_dist: false
-      min_approach_linear_velocity: 0.05
+      # 2026-08-19: 0.05 -> 0.10. 0.05 는 물리적으로 낼 수 없다.
+      # pwm_min_percent 20 이 만드는 최저 속도가 0.089 m/s 이고, 정지에서 확실히
+      # 기동하려면 그보다 위여야 한다(duty 20% 가 기동 임계 바로 위였다).
+      # 0.05 를 명령하면 실제로는 0.10 이상으로 나가 목표를 지나친다.
+      min_approach_linear_velocity: 0.10
       approach_velocity_scaling_dist: 0.6
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.0
@@ -183,7 +193,15 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.22
+      # 2026-08-19: robot_radius 0.22 -> 사각 footprint.
+      # 0.22 는 차체 박스(반폭 0.21)만 본 값이고 좌우로 튀어나온 바퀴가 빠져 있었다.
+      # 실측 기하: 트랙 0.74, 휠베이스 0.40, 바퀴폭 0.04, 바퀴반경 0.05
+      #   반폭   = 0.74/2 + 0.04/2 = 0.39   (전폭 0.78 m)
+      #   반길이 = 0.40/2 + 0.05   = 0.25   (전장 0.50 m)
+      # 즉 실제의 절반짜리 원으로 충돌 검사를 하고 있었다. 바퀴가 벽에 긁힌다.
+      # ⚠️ 차체 외곽(base_x/base_y)은 아직 실측 안 했다. 바퀴 바깥이 최외곽이라는
+      #    가정이고, 상부 프레임이 더 튀어나오면 이 값을 키울 것.
+      footprint: "[[0.25, 0.39], [0.25, -0.39], [-0.25, -0.39], [-0.25, 0.39]]"
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -224,7 +242,8 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.22
+      # local_costmap 과 동일한 실측 footprint. 근거는 그쪽 주석 참고.
+      footprint: "[[0.25, 0.39], [0.25, -0.39], [-0.25, -0.39], [-0.25, 0.39]]"
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
