@@ -8,11 +8,16 @@
         <right_joint>front_right_wheel_joint</right_joint>
         <right_joint>rear_right_wheel_joint</right_joint>
 
-        <!-- 물리 트랙은 0.50 (2*wheel_y) 이지만, 4륜 스키드 회전 슬립 보정을 위해 -->
+        <!-- 물리 트랙은 0.74 (2*wheel_y) 이지만, 4륜 스키드 회전 슬립 보정을 위해 -->
         <!-- 유효 트랙(effective)을 사용해 odom(바퀴) 회전이 실제 회전과 일치하도록 보정. -->
-        <!-- cmd wz 0.4/0.6/1.0 에서 회전 ratio 1.0 ±2% 검증(계통편차 없음). -->
         <!-- 재보정 필요시 라이다 스캔으로 실제 회전각을 재어 new = current * (odom/실제). -->
-        <wheel_separation>0.65</wheel_separation>
+        <!-- 2026-08-19 실측 반영으로 wheel_x/wheel_y 가 바뀌어 이 값도 시드로 재계산. -->
+        <!--   구 유효/물리 슬립비 0.65/0.50 = 1.30 을 유지해 0.74 * 1.30 = 0.96. -->
+        <!--   ⚠️ 검증 안 된 시드다. 휠베이스도 0.28 -> 0.40 으로 늘어 sim 스크럽이 -->
+        <!--      달라졌으므로 구 슬립비가 그대로 성립하지 않는다. sim 에서 재검증할 것. -->
+        <!--   ⚠️ 실기 유효 track(bringup.launch.py 의 1.14)과는 별개 값이다. sim 은 -->
+        <!--      메카넘이 아니라 원통 바퀴라 슬립 특성이 다르다. -->
+        <wheel_separation>0.96</wheel_separation>
         <wheel_radius>0.05</wheel_radius>
 
         <!-- ROS <-> GZ 브리지 토픽 -->
