@@ -90,6 +90,14 @@ class TriboBringupTribolib(Node):
         # 순수 직진(|wz|이 임계 미만)에는 절대 적용되지 않으며 기존 pwm_min_percent만 쓴다.
         self.declare_parameter("rotate_pwm_min", 45.0)         # 회전 시 적용 최소 듀티(%) (>= pwm_min_percent 권장)
         self.declare_parameter("rotate_wz_threshold", 0.10)    # |wz(turn_scale 적용 후)|가 이 값 이상이면 회전으로 간주 [rad/s]
+        # ⚠️ 이 바닥은 "제자리 회전"에서만 적용해야 한다. |wz| 만으로 판정하면 곡선 주행
+        #    (vx>0 이면서 wz>0)에도 걸리는데, 그러면 안쪽 바퀴 듀티가 바닥까지 끌어올려져
+        #    좌우 차이가 붕괴하고 곡률이 사라진다. 예: vx=0.25, wz=0.2, track 0.71,
+        #    max_lin_vel 0.85 → 좌 21.1% / 우 37.8% 인데 바닥 35% 를 먹이면 35 / 37.8 이
+        #    되어 차이가 16.7%p → 2.8%p. 곡률의 83% 가 날아가 사실상 직진이 된다.
+        #    이미 굴러가는 중이면 정지마찰을 넘을 필요가 없으므로 바닥도 필요 없다.
+        #    rot_lin_vx_max 와 같은 방식으로 |vx| 상한을 함께 본다.
+        self.declare_parameter("rotate_pwm_vx_max", 0.05)      # |vx| 가 이 이하일 때만 회전 바닥 적용 [m/s]
 
         # ---- 제자리 회전 선형화 (역아핀 보정) ----
         # 개루프 PWM 에서 실측한 제자리 회전 응답은 비례가 아니라 아핀이다:
@@ -109,6 +117,47 @@ class TriboBringupTribolib(Node):
         self.declare_parameter("rot_lin_slope", 0.216)    # (tribo v2 실측)
         self.declare_parameter("rot_lin_max_wz", 0.55)    # 실측 물리 천장(~0.6)보다 여유 있게 아래
         self.declare_parameter("rot_lin_vx_max", 0.02)    # |vx| 가 이 이하일 때만 = 제자리 회전으로 간주
+
+        # ---- 바퀴 속도 역아핀 선형화 (직진·곡선 공통) ----
+        # 문제: 기존 정규화는 norm = v_wheel / max_lin_vel 로 "속도 ∝ norm" 을 가정한다.
+        #   그런데 실측 응답은 아핀이다(PWM 바닥이 오프셋을 만든다):
+        #       실제_v = wheel_lin_offset + wheel_lin_slope * norm
+        #   기울기(slope)가 max_lin_vel 과 다르므로 좌우 속도차가 그 비율만큼 깎인다.
+        #   직진은 max_lin_vel 을 역산해 중간 대역만 맞출 수 있었지만(오차 ±7%),
+        #   곡선은 좌우 "차이"가 곧 곡률이라 이 왜곡이 그대로 곡률 손실로 나온다.
+        #   7b6a 실측: slope 0.402 vs max_lin_vel 0.639 → 차이가 0.63배로 축소.
+        # 해결: 목표 바퀴 속도를 역으로 풀어 norm 을 구한다.
+        #       norm = (|v_wheel| - offset) / slope
+        # 그러면 직진·곡선·제자리 회전이 모두 같은 식으로 정확해진다.
+        # ⚠️ 계수는 pwm_min_percent 와 gain_m* 에 종속이다. 둘 중 하나라도 바꾸면
+        #    scripts/speed_sweep.py 로 재측정할 것.
+        # ⚠️ 0 < |v| < offset 구간은 하드웨어가 낼 수 없다(바닥이 만드는 최소 속도).
+        #    그 구간에서는 낼 수 있는 두 값(0 또는 offset) 중 가까운 쪽을 고른다.
+        #    곡선 주행에서 안쪽 바퀴가 이 구간에 자주 들어오는데, 0 으로 끄는 편이
+        #    offset 으로 굴리는 것보다 곡률 오차가 작다(실측 기준 16% -> 3%).
+        self.declare_parameter("wheel_lin_enable", False)   # 기본 off — 기체별로 켤 것
+        self.declare_parameter("wheel_lin_offset", 0.089)   # m/s — norm=0 일 때의 실제 속도
+        self.declare_parameter("wheel_lin_slope", 0.402)    # m/s per norm
+        # ⚠️ 좌/우는 평균 게인이 다르면 기울기도 달라진다. 단일 기울기로는 양쪽을
+        #    동시에 선형화할 수 없다(2026-08-19 실측으로 확인).
+        #    duty = pwm_min + norm * g * (100 - pwm_min) 이므로
+        #        slope_side = A * g_side_avg * (100 - pwm_min)
+        #    여기서 A 는 duty->속도 응답의 기울기(실측 0.006102)다.
+        #    7b6a: 좌 게인평균 0.9415 -> 0.4596 / 우 0.7057 -> 0.3445 (33% 차이)
+        #    단일 기울기(평균 0.402)를 쓰면 좌우 duty 차이가 61% 로 줄어 곡률이
+        #    그만큼 손실된다. 실측: wz 0.10 명령에 0.061 (예측 0.061, 정확히 일치).
+        #    오프셋은 norm=0 에서 양측 모두 duty=pwm_min 이라 공통으로 둔다.
+        # 0 이면 wheel_lin_slope 를 양쪽에 그대로 쓴다(구 동작).
+        self.declare_parameter("wheel_lin_slope_l", 0.0)    # 0 = wheel_lin_slope 사용
+        self.declare_parameter("wheel_lin_slope_r", 0.0)
+
+        # ---- 정기구학용 트랙 ----
+        # 0 이면 track_width(물리값)를 그대로 쓴다. 양수면 그 값으로 덮어쓴다.
+        # 왜 필요한가: 목표 yaw 를 내려면 좌우 바퀴 속도차가 wz * (유효 track) 여야 한다.
+        #   유효 track 은 슬립까지 포함한 값이라 물리 track 보다 크다(7b6a: 0.74 -> 1.1845).
+        #   물리값을 쓰면 속도차를 0.74/1.1845 = 0.625 배만 명령하게 되어 그만큼 덜 돈다.
+        # odom 쪽 유효 track(bringup.launch.py)과 같은 값을 쓰는 것이 맞다.
+        self.declare_parameter("kin_track_width", 0.0)      # m (0 = track_width 사용)
 
         # ---- Debug / telemetry ----
         self.declare_parameter("debug_tx", False)
@@ -177,6 +226,7 @@ class TriboBringupTribolib(Node):
         self.rotate_pwm_min = float(self.get_parameter("rotate_pwm_min").value)
         self.rotate_pwm_min = self._clamp(self.rotate_pwm_min, 0.0, 100.0)
         self.rotate_wz_threshold = float(self.get_parameter("rotate_wz_threshold").value)
+        self.rotate_pwm_vx_max = float(self.get_parameter("rotate_pwm_vx_max").value)
 
         self.rot_lin_enable = bool(self.get_parameter("rot_lin_enable").value)
         self.rot_lin_offset = float(self.get_parameter("rot_lin_offset").value)
@@ -187,6 +237,19 @@ class TriboBringupTribolib(Node):
             self.get_logger().warn(
                 f"rot_lin_slope={self.rot_lin_slope} 가 0 이하 → 회전 선형화를 끈다.")
             self.rot_lin_enable = False
+
+        self.wheel_lin_enable = bool(self.get_parameter("wheel_lin_enable").value)
+        self.wheel_lin_offset = float(self.get_parameter("wheel_lin_offset").value)
+        self.wheel_lin_slope = float(self.get_parameter("wheel_lin_slope").value)
+        _sl = float(self.get_parameter("wheel_lin_slope_l").value)
+        _sr = float(self.get_parameter("wheel_lin_slope_r").value)
+        self.wheel_lin_slope_l = _sl if _sl > 1e-6 else self.wheel_lin_slope
+        self.wheel_lin_slope_r = _sr if _sr > 1e-6 else self.wheel_lin_slope
+        if self.wheel_lin_enable and self.wheel_lin_slope <= 1e-6:
+            self.get_logger().warn(
+                f"wheel_lin_slope={self.wheel_lin_slope} 가 0 이하 → 바퀴 선형화를 끈다.")
+            self.wheel_lin_enable = False
+        self.kin_track = float(self.get_parameter("kin_track_width").value)
 
         self.debug_tx = bool(self.get_parameter("debug_tx").value)
         self.publish_wheel_speed = bool(self.get_parameter("publish_wheel_speed").value)
@@ -263,7 +326,12 @@ class TriboBringupTribolib(Node):
             f"gain=({self.gain['m1']:.2f},{self.gain['m2']:.2f},"
             f"{self.gain['m3']:.2f},{self.gain['m4']:.2f}), "
             f"pwm_min_percent={self.pwm_min_percent:.1f}, "
-            f"rotate_pwm_min={self.rotate_pwm_min:.1f} (wz_thr={self.rotate_wz_threshold:.2f}), "
+            f"rotate_pwm_min={self.rotate_pwm_min:.1f} "
+            f"(wz_thr={self.rotate_wz_threshold:.2f}, vx_max={self.rotate_pwm_vx_max:.2f}), "
+            f"wheel_lin={'on' if self.wheel_lin_enable else 'off'}"
+            f"(off={self.wheel_lin_offset:.3f}, "
+            f"slope L/R={self.wheel_lin_slope_l:.3f}/{self.wheel_lin_slope_r:.3f}), "
+            f"kin_track={self.kin_track if self.kin_track > 1e-6 else self.track:.4f}, "
             f"publish_battery={self.publish_battery} (topic={self.battery_topic})"
         )
 
@@ -326,6 +394,26 @@ class TriboBringupTribolib(Node):
         else:
             self._send_pwm(0, 0, 0, 0)
 
+    # duty 를 정확히 pwm_min 에 앉히기 위한 최소 정규화 값.
+    # _to_pwm_percent 는 |norm| < 1e-6 을 0(모터 off)으로 보므로 그보다 커야 한다.
+    _WHEEL_LIN_MIN_NORM = 1e-3
+
+    def _wheel_norm(self, v: float, slope: float) -> float:
+        """목표 바퀴 속도 [m/s] → 정규화 명령(-1~1). 역아핀 보정.
+
+        실측 응답 실제_v = offset + slope * norm 을 역으로 푼다.
+        0 < |v| < offset 은 하드웨어가 낼 수 없는 구간이라, 낼 수 있는 두 값
+        (0 또는 offset) 중 목표에 가까운 쪽을 고른다.
+        """
+        a = abs(v)
+        if a < self.wheel_lin_offset * 0.5:
+            return 0.0                      # 0 이 더 가깝다 → 모터 끈다
+        if a < self.wheel_lin_offset:
+            # offset 이 더 가깝다 → 바닥 듀티로 굴린다
+            return math.copysign(self._WHEEL_LIN_MIN_NORM, v)
+        n = (a - self.wheel_lin_offset) / slope
+        return math.copysign(self._clamp(n, 0.0, 1.0), v)
+
     def _linearize_wz(self, vx: float, wz: float) -> float:
         """목표 wz [rad/s] → PWM 매핑에 넣을 내부 wz.
 
@@ -387,11 +475,20 @@ class TriboBringupTribolib(Node):
         wz = self._linearize_wz(vx, wz)
 
         # 차동 근사: 좌/우 선속도
-        v_left = vx - wz * (self.track / 2.0)
-        v_right = vx + wz * (self.track / 2.0)
+        # 목표 yaw 를 내려면 속도차가 wz * (유효 track) 이어야 한다. kin_track_width 가
+        # 설정돼 있으면 그 값을, 아니면 물리 track_width 를 쓴다(위 파라미터 주석 참고).
+        track_kin = self.kin_track if self.kin_track > 1e-6 else self.track
+        v_left = vx - wz * (track_kin / 2.0)
+        v_right = vx + wz * (track_kin / 2.0)
 
-        left_norm = self._clamp(v_left / max(self.max_lin, 1e-3), -1.0, 1.0)
-        right_norm = self._clamp(v_right / max(self.max_lin, 1e-3), -1.0, 1.0)
+        if self.wheel_lin_enable:
+            # 역아핀: 목표 바퀴 속도를 그대로 낼 수 있는 norm 을 푼다.
+            # max_lin_vel 은 여기서 쓰이지 않는다(위 안전 클램프에만 관여).
+            left_norm = self._wheel_norm(v_left, self.wheel_lin_slope_l)
+            right_norm = self._wheel_norm(v_right, self.wheel_lin_slope_r)
+        else:
+            left_norm = self._clamp(v_left / max(self.max_lin, 1e-3), -1.0, 1.0)
+            right_norm = self._clamp(v_right / max(self.max_lin, 1e-3), -1.0, 1.0)
         # ---- 후진일 때만 추가 보정 (방향별 gain) ----
         if left_norm < 0.0:
             left_norm = self._clamp(left_norm * self.gain_left_rev_factor, -1.0, 1.0)
@@ -404,11 +501,18 @@ class TriboBringupTribolib(Node):
         n4 = self.apply_gain_norm(right_norm, self.gain["m4"], self.invert["m4"])
 
         # ---- 회전 전용 PWM 바닥 선택 ----
-        # 회전 성분(wz)이 임계 이상일 때만 회전에 기여하는 모든 바퀴의 PWM 바닥을
-        # rotate_pwm_min으로 올린다(스크럽 마찰 극복). 순수 직진(|wz|<임계)에는
-        # 기존 pwm_min_percent가 그대로 적용되어 직진 거동에 영향이 없다.
+        # "제자리 회전"일 때만 네 바퀴의 PWM 바닥을 rotate_pwm_min 으로 올린다
+        # (횡방향 스크럽 마찰 극복). 순수 직진(|wz|<임계)에는 기존 pwm_min_percent 만 쓴다.
         # (rotate_pwm_min < pwm_min_percent로 잘못 설정돼도 max로 안전하게 바닥 보장)
-        if abs(wz) >= self.rotate_wz_threshold:
+        #
+        # |vx| 조건이 핵심이다. 이게 없으면 곡선 주행(vx>0, wz>0)에도 회전 바닥이 걸려
+        # 안쪽 바퀴가 바닥까지 끌어올려지고 좌우 듀티 차이가 붕괴해 곡률이 사라진다.
+        # 그러면 로봇이 낼 수 있는 동작이 "직진"과 "제자리 회전" 둘뿐이 되어, Nav2 가
+        # 원호를 명령해도 직진으로 뭉개진다. 굴러가는 중에는 정지마찰이 문제가 아니라
+        # 바닥이 애초에 불필요하다.
+        in_place_turn = (abs(wz) >= self.rotate_wz_threshold
+                         and abs(vx) <= self.rotate_pwm_vx_max)
+        if in_place_turn:
             pwm_floor = max(self.rotate_pwm_min, self.pwm_min_percent)
         else:
             pwm_floor = self.pwm_min_percent

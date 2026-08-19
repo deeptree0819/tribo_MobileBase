@@ -75,10 +75,17 @@ tribo_bringup:
     pwm_max_percent: 100.0
 
     # Rotation-only PWM boost (skid-steer lateral scrub friction stalls in-place turns).
-    # Applied ONLY when |wz| (after turn_scale) >= rotate_wz_threshold; pure straight
-    # driving keeps pwm_min_percent (no effect). Tuned on-floor 2026-06-15.
+    # Applied ONLY for IN-PLACE turns: |wz| >= rotate_wz_threshold AND |vx| <= rotate_pwm_vx_max.
+    # 순수 직진은 물론이고 곡선 주행에도 적용되지 않는다. Tuned on-floor 2026-06-15.
     rotate_pwm_min: 45.0          # min PWM duty (%) for wheels contributing to rotation
     rotate_wz_threshold: 0.10     # rad/s; |wz| above this is treated as a turn
+    # 2026-07-29 추가. 이게 없으면 곡선 주행(vx>0, wz>0)에도 회전 바닥이 걸려 안쪽 바퀴
+    # 듀티가 바닥까지 올라가고 좌우 차이가 붕괴해 곡률이 사라진다.
+    # 예: vx=0.25, wz=0.2 → 좌 21.1% / 우 37.8% 인데 바닥 35% 를 먹이면 35 / 37.8 이
+    # 되어 차이가 16.7%p → 2.8%p. 곡률의 83% 가 날아가 사실상 직진이 된다. 그 결과
+    # 로봇이 낼 수 있는 동작이 "직진"과 "제자리 회전" 둘뿐이었다.
+    # 굴러가는 중에는 정지마찰을 넘을 필요가 없으므로 바닥 자체가 불필요하다.
+    rotate_pwm_vx_max: 0.05       # m/s; |vx| 가 이 이하일 때만 회전 바닥 적용(=제자리 회전)
 
     # In-place rotation linearization (inverse-affine).
     # Open-loop PWM response is affine, not proportional:
@@ -94,6 +101,38 @@ tribo_bringup:
     rot_lin_slope: 0.216
     rot_lin_max_wz: 0.55          # rad/s — measured ceiling is ~0.6; stay under it
     rot_lin_vx_max: 0.02          # only linearize when |vx| <= this (in-place spin)
+
+    # ---- 바퀴 속도 역아핀 선형화 (직진·곡선 공통) ----
+    # 기존 정규화는 norm = v_wheel / max_lin_vel 로 "속도 ∝ norm" 을 가정하지만,
+    # 실측 응답은 아핀이다 (PWM 바닥이 오프셋을 만든다):
+    #     실제_v = wheel_lin_offset + wheel_lin_slope * norm
+    # 기울기가 max_lin_vel 과 다르므로 좌우 속도차가 그 비율만큼 깎인다. 직진은
+    # max_lin_vel 역산으로 중간 대역만 맞출 수 있었지만(오차 ±7%), 곡선은 좌우
+    # "차이"가 곧 곡률이라 이 왜곡이 그대로 곡률 손실로 나온다.
+    # 2026-08-19 기체 7b6a 실측: 곡률이 명령의 26~42% 밖에 안 나왔다. 두 원인의 곱이다.
+    #   ① 정기구학이 물리 track 을 써서 yaw 가 (물리/유효) 배  -> 0.625
+    #   ② 실측 기울기 0.402 vs max_lin_vel 0.639             -> 0.629
+    # 선형화 + kin_track_width 적용 후 곡률 90% 이상으로 회복.
+    #
+    # ⚠️ 좌/우 평균 게인이 다르면 기울기도 달라진다. 단일 기울기로는 양쪽을 동시에
+    #    선형화할 수 없다. slope_side = A * g_side_avg * (100 - pwm_min) 로 나눠 준다.
+    #    (A = duty->속도 응답 기울기. 7b6a 실측 0.006102)
+    # ⚠️ 계수는 pwm_min_percent 와 gain_m* 에 종속이다. 둘 중 하나라도 바꾸면
+    #    scripts/speed_sweep.py 로 재측정할 것. 해석적으로 유도하지 말 것 —
+    #    duty 공간 피팅을 norm 공간으로 환산했다가 피팅 범위 밖에서 무너진 적 있다.
+    # ⚠️ 기체별 값이라 기본은 off 다. per-unit motor_calib.yaml 에서 켠다.
+    wheel_lin_enable: false
+    wheel_lin_offset: 0.089       # m/s — norm=0 일 때의 실제 속도(=PWM 바닥이 내는 속도)
+    wheel_lin_slope: 0.402        # m/s per norm (좌우 평균)
+    wheel_lin_slope_l: 0.0        # 0 이면 wheel_lin_slope 사용
+    wheel_lin_slope_r: 0.0
+
+    # 정기구학용 트랙. 0 이면 robot_geom.yaml 의 물리 track_width 를 쓴다.
+    # 목표 yaw 를 내려면 좌우 속도차가 wz * (유효 track) 이어야 한다. 유효 track 은
+    # 슬립까지 포함한 값이라 물리보다 크다(7b6a: 0.74 -> 1.1845). 물리값을 쓰면
+    # 속도차를 0.625 배만 명령하게 되어 그만큼 덜 돈다.
+    # odom 쪽 유효 track(bringup.launch.py)과 같은 값을 쓰는 것이 맞다.
+    kin_track_width: 0.0
 
     # Debug / telemetry
     debug_hw: false
