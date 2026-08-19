@@ -424,6 +424,22 @@ sudo apt install -y ros-jazzy-realsense2-camera ros-jazzy-realsense2-description
 
 `ros-jazzy-librealsense2`는 의존성으로 함께 설치됩니다.
 
+> **⚠️ 노드가 `undefined symbol`로 죽으면 `diagnostic_updater`를 올리세요.**
+> ROS 패키지를 오래 업데이트하지 않은 기체에서 나타납니다.
+>
+> ```
+> [realsense2_camera_node-1] terminate called after throwing an instance of 'class_loader::LibraryLoadException'
+>   what():  Could not load library ... librealsense2_camera.so: undefined symbol: _ZN18diagnostic_updater7Updater...
+> ```
+>
+> 새로 받은 `realsense2_camera`가 빌드된 버전과 기체에 깔린 `diagnostic_updater`의 ABI가 안 맞아서입니다. 해결:
+>
+> ```bash
+> sudo apt install -y --only-upgrade ros-jazzy-diagnostic-updater ros-jazzy-diagnostic-msgs
+> ```
+>
+> (기체 7b6a에서 4.2.6 → 4.2.7 업그레이드로 해결. 같은 날 76c02a는 이미 4.2.7이라 문제가 없었습니다.)
+
 #### 5-5-3. 접근 권한
 
 ```bash
@@ -500,38 +516,109 @@ sudo dconf update
 
 > 사용자 계정 설정(`gsettings set`)이 아니라 **시스템 기본값**으로 두는 이유는, 계정을 새로 만들거나 SD 이미지를 복제해도 그대로 유지되어야 하기 때문입니다. 계정에 개별 설정이 이미 남아 있으면 시스템 기본값이 가려지므로 `dconf reset <키>`로 지워야 합니다.
 
-**원리.** SSH 비대화형 세션에는 화면 정보가 없으므로, 어느 디스플레이에 그릴지 직접 알려줘야 합니다. `XAUTHORITY` 파일은 mutter가 **매 부팅마다 임의 접미사로 새로 만들기 때문에** 경로를 하드코딩하면 재부팅 후 깨집니다. 항상 글롭으로 최신 파일을 찾습니다.
+**띄우기.** 전용 스크립트가 환경변수 조립·전체화면 강제까지 처리합니다.
+
+```bash
+sudo apt install -y wmctrl
+~/tribo_ws/src/tribo/tribo_bringup/scripts/launch_camera_on_lcd.sh
+```
+
+다른 토픽을 보려면 인자로 넘깁니다.
+
+```bash
+~/tribo_ws/src/tribo/tribo_bringup/scripts/launch_camera_on_lcd.sh /camera/camera/depth/image_rect_raw
+```
+
+`wmctrl`이 없으면 경고를 찍고 창이 작게 뜹니다.
+
+**끄기.** LCD 앞이라면 `q` 또는 `ESC`. SSH라면:
+
+```bash
+pkill -f "lcd_camera_view[.]py"
+```
+
+카메라 노드까지 내리려면:
+
+```bash
+pkill -f realsense2_camera_node
+```
+
+> 대괄호(`[.]`)는 오타가 아닙니다. `pkill -f`는 **자기 자신의 명령줄도 검사**하므로, 패턴이 그대로 들어 있으면 스스로를 죽여 뒤 명령이 실행되지 않습니다. `[.]`는 정규식으로는 `.`과 같지만 문자열로는 다르므로 자기 매칭을 피합니다.
+
+**화면이 꺼져 있을 때 깨우기.** 절전 설정을 끄기 **전에** 이미 꺼졌다면 설정만으로는 켜지지 않습니다.
+
+```bash
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+busctl --user call org.gnome.ScreenSaver /org/gnome/ScreenSaver org.gnome.ScreenSaver SetActive b false
+```
+
+> 반대로 화면을 **끄는** 것은 같은 호출에 `b true`를 주면 될 것으로 보이지만, 아직 실기에서 확인하지 못했습니다. 확인되면 이 문단을 갱신하세요.
+
+**왜 전용 스크립트인가.** `rqt_image_view`는 창 장식과 툴바가 1024×600 화면의 상당 부분을 먹는데, mutter가 SSH에서 온 리사이즈 요청을 무시해서 크기를 맞출 수도 없습니다(228×169로 뜨는 것을 실측). `lcd_camera_view.py`는 OpenCV 전체화면 창에 영상만 그리고, 화면과 영상의 비율이 달라도 찌그러뜨리지 않고 **비율 유지 확대 후 중앙 크롭**으로 채웁니다.
+
+구현하며 밟은 함정이 스크립트 주석에 남아 있습니다.
+
+| 함정 | 내용 |
+|------|------|
+| `cv2.getWindowImageRect()` | 창 크기가 아니라 "마지막에 그린 이미지 영역"을 반환. 그 값으로 다시 크기를 정하면 프레임마다 이미지가 줄어듦 |
+| `fb0/virtual_size` | 프레임버퍼 콘솔 크기이지 X 모드가 아님. 기체 7b6a에서 fb0는 1024×768, 실제 X는 1024×600. `xrandr`을 써야 함 |
+| OpenCV 전체화면 속성 | GNOME Wayland에서 무시됨. `xdotool windowsize`도 무시. `wmctrl -b add,fullscreen`만 먹음 |
+| `set -u` + ROS 소싱 | `AMENT_TRACE_SETUP_FILES: unbound variable`로 죽음. 소싱 구간만 `set +u` |
+
+**RViz로 보고 싶다면** (depth·포인트클라우드까지):
 
 ```bash
 export DISPLAY=:0
 export XAUTHORITY=$(ls -t /run/user/$(id -u)/.mutter-Xwaylandauth.* | head -1)
-```
-
-**방법 1 — `rqt_image_view` (간단, 영상만 보기)**
-
-```bash
-sudo apt install -y ros-jazzy-rqt-image-view
-ros2 run rqt_image_view rqt_image_view /camera/camera/color/image_raw
-```
-
-창이 작게 뜹니다. LCD에서 직접 마우스로 최대화하세요 — SSH에서 `xdotool`로 크기를 바꾸려 해도 mutter가 무시합니다.
-
-**방법 2 — `rviz2` 전체화면 (depth·포인트클라우드까지)**
-
-```bash
 rviz2 --fullscreen
 ```
 
-1024×600 전체화면으로 뜹니다. 실행 후 좌하단 **Add** 로 `Image`(토픽 `/camera/camera/color/image_raw`) 또는 `PointCloud2`(토픽 `/camera/camera/depth/color/points`)를 추가합니다. 포인트클라우드는 카메라를 `pointcloud.enable:=true`로 띄워야 나옵니다.
+좌하단 **Add**로 `Image` 또는 `PointCloud2`를 추가합니다. 포인트클라우드는 카메라를 `pointcloud.enable:=true`로 띄워야 나옵니다.
 
-> Nav2 단계에서는 `bringup_launch.xml`이 `launch_rviz_on_lcd.sh`로 RViz를 자동 표시합니다(7장). 위 두 환경변수를 그 스크립트가 대신 처리합니다.
+> Nav2 단계에서는 `bringup_launch.xml`이 `launch_rviz_on_lcd.sh`로 RViz를 자동 표시합니다(7장).
 
 | 증상 | 원인 |
 |------|------|
 | `cannot open display :0` | LCD에 로그인된 GNOME 세션 없음 — 자동 로그인 확인 |
 | `Authorization required` | `XAUTHORITY` 경로가 낡음 — 글롭으로 다시 잡을 것 |
 | 창은 떴는데 영상이 검음 | 카메라 노드 미실행 또는 토픽 이름 오타 |
+| 창이 작게 뜸 | `wmctrl` 미설치 |
 | 화면이 5분 뒤 꺼짐 | 위 dconf 설정 누락 |
+| 설정했는데도 화면이 꺼져 있음 | 설정 전에 이미 꺼진 것 — 위 깨우기 명령 실행 |
+
+#### 5-5-7. PC에서 영상 보기
+
+**압축 토픽을 써야 합니다.** 원본을 그대로 구독하면 WiFi가 포화되어 영상뿐 아니라 **Nav2의 costmap·TF 통신까지 밀립니다.**
+
+로봇에 압축 전송 플러그인을 설치하면 `/compressed` 토픽이 생깁니다.
+
+```bash
+sudo apt install -y ros-jazzy-compressed-image-transport
+```
+
+PC에서:
+
+```bash
+export ROS_DOMAIN_ID=38
+ros2 run rqt_image_view rqt_image_view /camera/camera/color/image_raw/compressed
+```
+
+실측한 대역폭입니다(컬러 1280×720@30, USB 3.0).
+
+| | 메시지 크기 | 30fps 환산 |
+|---|---|---|
+| 원본 `image_raw` | 2.76 MB | **662 Mbps** |
+| 압축 `compressed` | 0.23 MB | **56 Mbps** |
+
+> **압축해도 1280×720@30은 캠퍼스 WiFi에서 버겁습니다.** 실측에서 패킷 손실 33%, RTT 400ms까지 올라가 SSH도 느려졌습니다. Nav2와 함께 쓸 거면 해상도를 낮추세요.
+>
+> ```bash
+> ros2 launch realsense2_camera rs_launch.py enable_depth:=false rgb_camera.profile:=640x480x15
+> ```
+
+> **`ROS_DOMAIN_ID`가 다르면 토픽이 아예 안 보입니다.** 기체마다 값이 다릅니다(7b6a=38, 76c02a=21). PC도 같은 값으로 맞추세요.
+>
+> 로봇 `~/.bashrc`에 넣을 때는 **"비대화형이면 return" 구문보다 위에** 둬야 합니다. 아래에 두면 대화형 셸에서만 잡혀서, `ssh <host> '<명령>'` 형태의 원격 실행에서는 도메인이 0이 되고 "노드가 안 보인다"로 헤매게 됩니다.
 
 ---
 
