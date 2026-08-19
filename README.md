@@ -383,6 +383,156 @@ cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
 > performance 거버너는 발열·소비전력이 늘어납니다. Pi5는 액티브 쿨러가 있으면 문제없습니다. Nav2를 안 쓰고 bringup만 돌릴 땐 `ondemand`로도 충분합니다.
 
+### 5-5. 뎁스 카메라 (Intel RealSense D435)
+
+#### 5-5-1. USB 3.0 포트에 연결 ⚠️
+
+**가장 흔한 실패 지점입니다.** D435는 depth와 color 영상을 동시에 보내므로 USB 3.0이 필요합니다. USB 2.0에 물리면 동작은 하지만 **프레임레이트가 절반**으로 떨어집니다.
+
+| 연결 | depth | color |
+|------|-------|-------|
+| USB 2.0 | 640×480 @ **15 fps** | 640×480 @ **15 fps** |
+| USB 3.0 | 848×480 @ **30 fps** | 640×480 @ **30 fps** |
+
+대역폭을 계산하면 이유가 보입니다. depth 640×480×16bit @30fps ≈ 147 Mbps, color도 비슷해서 합치면 약 300 Mbps인데 USB 2.0의 실효 대역폭이 그 언저리입니다. 그래서 librealsense가 두 스트림을 다 내보내려고 **알아서 15fps로 낮춥니다** — 에러가 아니라 조용한 성능 저하라 놓치기 쉽습니다.
+
+- **소켓**: Pi5의 **파란색** USB-A (검은색은 USB 2.0). Pi5의 USB-C는 **전원 전용**이라 데이터가 안 됩니다.
+- **케이블**: **USB 3.0 이상, A to C**. USB-A 단자 안쪽이 파란색이고 핀이 9개면 3.0, 흰색이고 4개면 2.0입니다. "고속충전"만 적힌 케이블은 데이터가 2.0인 경우가 흔합니다.
+
+연결 후 협상 속도를 확인합니다. **`5000`이 나와야 정상**이고 `480`이면 USB 2.0입니다.
+
+```bash
+for d in /sys/bus/usb/devices/*/; do [ -f "$d/idVendor" ] && [ "$(cat $d/idVendor)" = "8086" ] && cat "$d/speed"; done
+```
+
+`480`이 나오면 어느 소켓이 3.0인지 실측으로 찾습니다. 아래를 띄워둔 채 카메라를 뽑았다 꽂으면 소켓마다 한 줄씩 나옵니다 — `SuperSpeed`가 USB 3.0, `high-speed`가 USB 2.0입니다.
+
+```bash
+sudo dmesg -w | grep --line-buffered "new .*USB device"
+```
+
+> **라이다와 보드는 검은 소켓으로 충분합니다.** 둘 다 USB 시리얼 변환기라 12 Mbps 수준으로 동작합니다. 파란 소켓에 꽂아도 보드레이트(115200~256000 bps)가 상한이라 아무 이득이 없습니다. 파란 소켓 2개는 카메라 몫으로 남겨두세요.
+
+#### 5-5-2. 패키지 설치
+
+ROS 저장소에 arm64 바이너리가 있어 **소스 빌드가 필요 없습니다**.
+
+```bash
+sudo apt update
+sudo apt install -y ros-jazzy-realsense2-camera ros-jazzy-realsense2-description
+```
+
+`ros-jazzy-librealsense2`는 의존성으로 함께 설치됩니다.
+
+#### 5-5-3. 접근 권한
+
+```bash
+sudo usermod -aG video $USER
+```
+
+그룹 변경은 **재로그인(또는 재부팅) 후 적용**됩니다.
+
+> **이 단계를 건너뛰면 "될 때도 있고 안 될 때도 있는" 상태가 됩니다.** `/dev/video*`는 `uaccess` 태그가 붙어 있어, 로봇 화면에 사용자가 로그인해 있으면 systemd-logind가 그 세션에 ACL을 임시로 부여합니다. 그래서 LCD에 로그인된 상태에서는 `video` 그룹 없이도 카메라가 열립니다. 하지만 자동 로그인을 끄거나 콘솔 세션이 없으면 SSH로만 접속했을 때 권한 오류가 납니다. `video` 그룹에 넣어두면 세션 상태와 무관하게 항상 열립니다.
+
+#### 5-5-4. 실행
+
+```bash
+ros2 launch realsense2_camera rs_launch.py
+```
+
+포인트클라우드(`/camera/camera/depth/color/points`)는 기본으로 꺼져 있습니다. 3D로 보려면:
+
+```bash
+ros2 launch realsense2_camera rs_launch.py pointcloud.enable:=true
+```
+
+#### 5-5-5. 동작 확인
+
+```bash
+ros2 topic list | grep camera
+ros2 topic hz /camera/camera/depth/image_rect_raw
+```
+
+USB 3.0이면 **30 Hz**, USB 2.0이면 15 Hz가 나옵니다. 노드 로그에도 `Device USB type: 3.2`처럼 찍히고, USB 2.0이면 `Reduced performance is expected` 경고가 함께 나옵니다.
+
+| 증상 | 원인 |
+|------|------|
+| 토픽이 아예 안 보임 | `ROS_DOMAIN_ID` 불일치 (6장 참고) |
+| 15 fps에서 안 올라감 | USB 2.0 연결 — 5-5-1 |
+| 권한 오류로 열리지 않음 | `video` 그룹 미반영 — 재로그인 필요 |
+| 모터가 안 먹음 | 카메라 꽂다가 보드(CH340) USB를 뽑았는지 확인 |
+
+#### 5-5-6. 로봇 LCD에 영상 띄우기
+
+PC 없이 로봇 화면만으로 카메라 영상을 확인할 수 있습니다. 실습·시연에 유용합니다.
+
+**전제 조건 두 가지**가 있습니다.
+
+1. **LCD에 GNOME 세션이 로그인돼 있어야 합니다.** 자동 로그인이 켜져 있으면 부팅만으로 충족됩니다.
+
+```bash
+grep AutomaticLogin /etc/gdm3/custom.conf
+```
+
+2. **화면이 꺼지지 않아야 합니다.** Ubuntu Desktop 기본값은 5분 뒤 화면을 끄고(`idle-delay=300`), 나아가 **기체 전체를 서스펜드**합니다(`sleep-inactive-ac-type='suspend'`). 로봇에는 둘 다 위험하므로 시스템 기본값으로 꺼둡니다.
+
+```bash
+sudo tee /etc/dconf/profile/user <<'EOF'
+user-db:user
+system-db:local
+EOF
+sudo mkdir -p /etc/dconf/db/local.d
+sudo tee /etc/dconf/db/local.d/00-tribo-lcd <<'EOF'
+[org/gnome/desktop/session]
+idle-delay=uint32 0
+
+[org/gnome/desktop/screensaver]
+lock-enabled=false
+idle-activation-enabled=false
+
+[org/gnome/settings-daemon/plugins/power]
+idle-dim=false
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+EOF
+sudo dconf update
+```
+
+> 사용자 계정 설정(`gsettings set`)이 아니라 **시스템 기본값**으로 두는 이유는, 계정을 새로 만들거나 SD 이미지를 복제해도 그대로 유지되어야 하기 때문입니다. 계정에 개별 설정이 이미 남아 있으면 시스템 기본값이 가려지므로 `dconf reset <키>`로 지워야 합니다.
+
+**원리.** SSH 비대화형 세션에는 화면 정보가 없으므로, 어느 디스플레이에 그릴지 직접 알려줘야 합니다. `XAUTHORITY` 파일은 mutter가 **매 부팅마다 임의 접미사로 새로 만들기 때문에** 경로를 하드코딩하면 재부팅 후 깨집니다. 항상 글롭으로 최신 파일을 찾습니다.
+
+```bash
+export DISPLAY=:0
+export XAUTHORITY=$(ls -t /run/user/$(id -u)/.mutter-Xwaylandauth.* | head -1)
+```
+
+**방법 1 — `rqt_image_view` (간단, 영상만 보기)**
+
+```bash
+sudo apt install -y ros-jazzy-rqt-image-view
+ros2 run rqt_image_view rqt_image_view /camera/camera/color/image_raw
+```
+
+창이 작게 뜹니다. LCD에서 직접 마우스로 최대화하세요 — SSH에서 `xdotool`로 크기를 바꾸려 해도 mutter가 무시합니다.
+
+**방법 2 — `rviz2` 전체화면 (depth·포인트클라우드까지)**
+
+```bash
+rviz2 --fullscreen
+```
+
+1024×600 전체화면으로 뜹니다. 실행 후 좌하단 **Add** 로 `Image`(토픽 `/camera/camera/color/image_raw`) 또는 `PointCloud2`(토픽 `/camera/camera/depth/color/points`)를 추가합니다. 포인트클라우드는 카메라를 `pointcloud.enable:=true`로 띄워야 나옵니다.
+
+> Nav2 단계에서는 `bringup_launch.xml`이 `launch_rviz_on_lcd.sh`로 RViz를 자동 표시합니다(7장). 위 두 환경변수를 그 스크립트가 대신 처리합니다.
+
+| 증상 | 원인 |
+|------|------|
+| `cannot open display :0` | LCD에 로그인된 GNOME 세션 없음 — 자동 로그인 확인 |
+| `Authorization required` | `XAUTHORITY` 경로가 낡음 — 글롭으로 다시 잡을 것 |
+| 창은 떴는데 영상이 검음 | 카메라 노드 미실행 또는 토픽 이름 오타 |
+| 화면이 5분 뒤 꺼짐 | 위 dconf 설정 누락 |
+
 ---
 
 ## 6. ROS_DOMAIN_ID 설정 (PC ↔ 로봇 통신)
