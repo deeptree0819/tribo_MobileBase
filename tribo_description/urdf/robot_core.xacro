@@ -11,14 +11,18 @@
     <!-- ============================================================= -->
 
     <!-- 바퀴 -->
+    <!-- 100mm 메카넘 공칭 반경. 운동학용 보정 반경(robot_geom.yaml 의 wheel_radius)과 -->
+    <!-- 는 성격이 다르다. 여기는 물리 형상이므로 공칭값을 쓴다. -->
     <xacro:property name="wheel_radius" value="0.05"/>
     <xacro:property name="wheel_width"  value="0.04"/>
-    <xacro:property name="wheel_x"      value="0.14"/>   <!-- 전후 휠 중심 (휠베이스/2) -->
-    <xacro:property name="wheel_y"      value="0.25"/>   <!-- 좌우 휠 중심 (트랙/2). 차체 반폭(0.21)보다 바깥 → 좌우 돌출 -->
+    <!-- 2026-08-19 실측으로 교체. 기존 0.14/0.25 는 위 주석대로 사진 비율 추정치였고 -->
+    <!-- 실측(휠베이스 0.40, 트랙 0.74)과 크게 어긋나 있었다. -->
+    <xacro:property name="wheel_x"      value="0.20"/>   <!-- 전후 휠 중심 (휠베이스 0.40 의 절반) -->
+    <xacro:property name="wheel_y"      value="0.37"/>   <!-- 좌우 휠 중심 (트랙 0.74 의 절반). 차체 반폭(0.21)보다 16cm 바깥 → 좌우 크게 돌출 -->
 
     <!-- 하단 베이스(구동부 박스). 좌우(Y)가 더 긴 직사각형 -->
     <xacro:property name="base_x"       value="0.36"/>   <!-- 전후 길이 -->
-    <xacro:property name="base_y"       value="0.42"/>   <!-- 좌우 폭 -->
+    <xacro:property name="base_y"       value="0.42"/>   <!-- 좌우 폭. ⚠️ 미실측 추정치 — 구조 변경분 반영 안 됨 -->
     <xacro:property name="base_h"       value="0.12"/>   <!-- 높이 -->
     <xacro:property name="base_bottom"  value="0.0"/>    <!-- 베이스 박스 바닥 z = 휠 축 높이. 모터/바퀴가 하단에 위치 -->
     <xacro:property name="base_cz"      value="${base_bottom + base_h/2}"/>
