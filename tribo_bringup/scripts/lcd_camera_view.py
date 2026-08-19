@@ -17,6 +17,8 @@ cover 방식으로 맞춘다: 짧은 쪽 기준으로 확대한 뒤 넘치는 �
   종료: LCD 에서 q 또는 ESC. SSH 로 띄웠으면 pkill -f lcd_camera_view
 """
 
+import re
+import subprocess
 import sys
 
 import cv2
@@ -44,12 +46,30 @@ def cover_fit(img, dst_w, dst_h):
 
 
 def screen_size(default=(1024, 600)):
-    """프레임버퍼에서 화면 해상도를 읽는다.
+    """X 화면 해상도를 구한다.
 
     cv2.getWindowImageRect() 를 쓰면 안 된다. 그 함수는 창 크기가 아니라
     "마지막에 그린 이미지가 차지한 영역"을 돌려주기 때문에, 그 값으로 다시
     크기를 정하면 프레임마다 이미지가 줄어드는 되먹임이 생긴다(실측 확인).
+
+    /sys/class/graphics/fb0/virtual_size 도 믿을 수 없다. 그건 프레임버퍼 콘솔
+    크기이지 X 가 쓰는 모드가 아니다. 기체 7b6a 에서 fb0 는 1024x768 인데 실제
+    X 모드는 1024x600 이었다(76c02a 는 둘이 같아 문제가 안 드러났다).
+    창 관리자가 창을 잡는 기준은 X 모드이므로 xrandr 을 우선한다.
     """
+    try:
+        out = subprocess.run(
+            ["xrandr"], capture_output=True, text=True, timeout=5
+        ).stdout
+        for line in out.splitlines():
+            # "HDMI-1 connected primary 1024x600+0+0 ..." 형태에서 뽑는다
+            if " connected" in line:
+                m = re.search(r"(\d+)x(\d+)\+\d+\+\d+", line)
+                if m:
+                    return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+
     try:
         with open("/sys/class/graphics/fb0/virtual_size") as f:
             w, h = f.read().strip().split(",")
