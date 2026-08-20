@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -21,6 +21,11 @@ def generate_launch_description():
     default_slam_params = os.path.join(pkg_nav, 'config', 'slam_toolbox_mapping.yaml')
     default_scan_filter_params = os.path.join(pkg_nav, 'config', 'scan_filter.yaml')
     default_rviz_cfg = os.path.join(pkg_nav, 'rviz', 'map_building.rviz')
+    # wrapper 는 share/ 가 아니라 lib/ 에 설치된다(setup.py 의 scripts/*.sh 규칙).
+    default_rviz_launcher = os.path.join(
+        get_package_prefix('tribo_navigation'), 'lib', 'tribo_navigation',
+        'launch_rviz_on_lcd.sh',
+    )
 
     # ---- Launch args ----
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -45,6 +50,12 @@ def generate_launch_description():
 
         DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument('rviz_config', default_value=default_rviz_cfg),
+        DeclareLaunchArgument('rviz_display', default_value=':0'),
+        DeclareLaunchArgument(
+            'rviz_xauthority_glob',
+            default_value='/run/user/1000/.mutter-Xwaylandauth.*',
+        ),
+        DeclareLaunchArgument('rviz_launcher', default_value=default_rviz_launcher),
     ]
 
     # ---- Laser scan filter: /scan -> /scan_filtered ----
@@ -70,12 +81,27 @@ def generate_launch_description():
         }.items(),
     )
 
-    # ---- RViz (optional) ----
+    # ---- RViz 를 로봇 LCD 에 전체화면 표시 (optional) ----
+    # bringup_launch.xml(Nav2)과 같은 방식이다. XAUTHORITY 는 mutter 가 매 부팅마다
+    # 임의 접미사로 새로 만들기 때문에 wrapper 스크립트가 런타임에 글롭으로 해석한다.
+    # 매핑 중에는 맵이 자라므로 화면에 맞추는 사전 계산(fit_rviz_to_map.py)을 쓸 수
+    # 없다. map_building.rviz 의 고정 Scale 을 쓰고, 필요하면 LCD 에서 휠로 조정한다.
+    rviz_lcd = ExecuteProcess(
+        cmd=[
+            LaunchConfiguration('rviz_launcher'),
+            rviz_config,
+            LaunchConfiguration('rviz_display'),
+            LaunchConfiguration('rviz_xauthority_glob'),
+        ],
+        name='rviz2_lcd',
+        output='screen',
+        condition=IfCondition(use_rviz),
+    )
 
     return LaunchDescription(
         declare + [
             scan_filter_node,
             slam_toolbox,
-            
+            rviz_lcd,
         ]
     )
