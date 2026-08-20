@@ -36,7 +36,7 @@ VIEWER="${SCRIPT_DIR}/lcd_camera_view.py"
 # NOTE: 소싱하는 동안에는 nounset 을 반드시 꺼야 한다. ROS/colcon 의 setup.bash 는
 #       미설정 변수를 참조하므로 set -u 상태에서 소싱하면
 #       "AMENT_TRACE_SETUP_FILES: unbound variable" 로 죽는다.
-#       scripts/find_tribos.sh 주석에 적힌 것과 같은 함정이다.
+#       ROS 계열 setup 스크립트 전반에서 반복되는 함정이다.
 set +u
 if [ -z "${ROS_DISTRO:-}" ]; then
   for d in /opt/ros/*/setup.bash; do
