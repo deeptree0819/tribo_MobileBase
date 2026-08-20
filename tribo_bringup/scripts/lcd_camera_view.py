@@ -22,12 +22,44 @@ import subprocess
 import sys
 
 import cv2
+import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
 WINDOW = "tribo_lcd_camera"
+
+
+# depth 를 색으로 칠할 거리 범위(미터). 이 밖은 잘라낸다.
+# 고정 범위를 쓰는 이유: 매 프레임 최소/최대로 정규화하면 장면이 바뀔 때마다
+# 같은 거리가 다른 색으로 보여서 실습에 쓸 수가 없다. 실내 기준으로 잡았다.
+DEPTH_MIN_M = 0.3
+DEPTH_MAX_M = 4.0
+
+
+def colorize_depth(depth, encoding):
+    """16UC1(mm) / 32FC1(m) 거리 이미지를 컬러맵으로 칠한다.
+
+    depth 토픽은 컬러 영상이 아니라 거리값이라 bgr8 로 바로 변환할 수 없다
+    ("[16UC1] is not a color format" 오류). 거리를 색으로 바꿔야 눈에 보인다.
+
+    COLORMAP_JET 기준으로 **가까움=파랑, 멀음=빨강**이다(정규화값 0 이 파랑).
+    값이 0 인 픽셀은 거리 측정 실패이므로 검게 남긴다 — 그냥 두면 '아주 가까움'
+    으로 칠해져서 코앞에 물체가 있는 것처럼 보인다.
+    """
+    if encoding == "16UC1":
+        meters = depth.astype(np.float32) / 1000.0  # mm -> m
+    else:  # 32FC1 은 이미 미터
+        meters = depth.astype(np.float32)
+
+    invalid = (meters <= 0) | ~np.isfinite(meters)
+
+    clipped = np.clip(meters, DEPTH_MIN_M, DEPTH_MAX_M)
+    norm = (clipped - DEPTH_MIN_M) / (DEPTH_MAX_M - DEPTH_MIN_M)
+    colored = cv2.applyColorMap((norm * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    colored[invalid] = 0
+    return colored
 
 
 def cover_fit(img, dst_w, dst_h):
@@ -95,7 +127,11 @@ class LcdCameraView(Node):
 
     def on_image(self, msg):
         try:
-            img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            if msg.encoding in ("16UC1", "32FC1"):
+                raw = self.bridge.imgmsg_to_cv2(msg, "passthrough")
+                img = colorize_depth(raw, msg.encoding)
+            else:
+                img = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         except Exception as exc:  # 인코딩이 예상과 다를 때
             self.get_logger().warn(f"변환 실패: {exc}")
             return
