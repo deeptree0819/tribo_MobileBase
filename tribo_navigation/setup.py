@@ -30,7 +30,8 @@ setup(
         ),
         (
             os.path.join("lib", package_name),
-            glob(os.path.join("scripts", "*.sh")),
+            glob(os.path.join("scripts", "*.sh"))
+            + glob(os.path.join("scripts", "*.py")),
         ),
     ],
     install_requires=['setuptools'],

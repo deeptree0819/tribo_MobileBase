@@ -26,6 +26,10 @@ def generate_launch_description():
         get_package_prefix('tribo_navigation'), 'lib', 'tribo_navigation',
         'launch_rviz_on_lcd.sh',
     )
+    default_map_launcher = os.path.join(
+        get_package_prefix('tribo_navigation'), 'lib', 'tribo_navigation',
+        'launch_map_on_lcd.sh',
+    )
 
     # ---- Launch args ----
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -48,7 +52,16 @@ def generate_launch_description():
         DeclareLaunchArgument('scan_in_topic', default_value='/scan'),
         DeclareLaunchArgument('scan_out_topic', default_value='/scan_filtered'),
 
-        DeclareLaunchArgument('use_rviz', default_value='true'),
+        # LCD 표시는 기본으로 자동 맞춤 맵 뷰어를 쓴다. RViz 는 배율이 설정 파일에
+        # 박힌 고정값이라 실행 중 조정하려면 마우스가 필요한데, 이 로봇에는
+        # 입력장치가 없다. 맵은 매핑 중 계속 자라므로 고정 배율로는 곧 화면을 벗어난다.
+        DeclareLaunchArgument('use_lcd_map', default_value='true'),
+        DeclareLaunchArgument('map_topic', default_value='/map'),
+        DeclareLaunchArgument('lcd_map_launcher', default_value=default_map_launcher),
+
+        # RViz 가 필요하면(라이다 스캔·TF 까지 보고 싶을 때) use_rviz:=true 로 켠다.
+        # 둘을 동시에 켜면 같은 화면을 두고 다투므로 하나만 쓸 것.
+        DeclareLaunchArgument('use_rviz', default_value='false'),
         DeclareLaunchArgument('rviz_config', default_value=default_rviz_cfg),
         DeclareLaunchArgument('rviz_display', default_value=':0'),
         DeclareLaunchArgument(
@@ -98,10 +111,26 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
+    # ---- 자동 맞춤 맵 뷰어를 LCD 에 전체화면 표시 (기본) ----
+    # /map 을 구독해 그려진 영역의 경계에 맞춰 매 프레임 배율을 다시 잡는다.
+    # 맵이 자라면 자동으로 축소되므로 실행 중 손댈 것이 없다.
+    map_lcd = ExecuteProcess(
+        cmd=[
+            LaunchConfiguration('lcd_map_launcher'),
+            LaunchConfiguration('map_topic'),
+            LaunchConfiguration('rviz_display'),
+            LaunchConfiguration('rviz_xauthority_glob'),
+        ],
+        name='lcd_map_view',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('use_lcd_map')),
+    )
+
     return LaunchDescription(
         declare + [
             scan_filter_node,
             slam_toolbox,
+            map_lcd,
             rviz_lcd,
         ]
     )
