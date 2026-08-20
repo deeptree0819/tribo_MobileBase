@@ -75,7 +75,9 @@
 
   <!-- 로봇 LCD에 RViz2 전체화면 자동 표시
        - SSH 비대화형 세션에서 띄울 때를 대비해 wrapper 스크립트가 DISPLAY/XAUTHORITY 조립 -->
-  <executable cmd="$(var rviz_launcher) $(var rviz_config) $(var rviz_display) $(var rviz_xauthority_glob)"
+  <!-- map 을 함께 넘겨 wrapper 가 맵 크기에 맞는 설정을 만들어 쓰게 한다.
+       안 넘기면 navigation.rviz 의 고정 배율이라 맵 일부만 화면에 들어온다. -->
+  <executable cmd="$(var rviz_launcher) $(var rviz_config) $(var rviz_display) $(var rviz_xauthority_glob) $(var map)"
               name="rviz2_lcd" output="screen"
               if="$(var use_rviz)"/>
 </launch>
