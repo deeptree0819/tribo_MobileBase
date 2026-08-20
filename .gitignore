@@ -21,3 +21,7 @@ tribo_bringup/config/motor_calib.yaml
 # Ad-hoc map captures pulled off a specific robot (binary pgm; not referenced
 # by any launch/param file). Keep maps out of the repo.
 maps_from_*/
+
+# Per-robot geometry override (wheel_radius / odom effective track).
+# Each unit measures differently; see config/unit_geom.yaml.example.
+tribo_bringup/config/unit_geom.yaml

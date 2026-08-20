@@ -234,6 +234,30 @@ def generate_launch_description():
     # base port is authoritative (mirrors how the lidar port is passed).
     bringup_params.append({"port": BASE_SERIAL_PORT})
 
+    # Per-robot geometry override (.gitignore'd, like motor_calib.yaml).
+    # 왜 필요한가: wheel_radius 와 odom 유효 track 은 기체마다 다른데(모터/기어 개체차,
+    # 바퀴 접지 편차) 저장소는 한 슬롯뿐이다. 예전에는 한 기체 값을 커밋해두고 다른
+    # 기체에서 "미커밋 로컬 수정"으로 덮어쓰고 있었는데, 그러면 그 파일을 건드리는
+    # 커밋이 하나만 들어와도 pull 때 캘리브가 조용히 날아간다. 에러도 안 뜬다.
+    # 실측 차이(2026-08-20): wheel_radius 0.0563 vs 0.0521, odom track 1.1845 vs 1.1037.
+    #   -> 잘못 섞이면 10m 주행에 75cm, 360도 회전마다 24도씩 오차가 쌓인다.
+    #      IMU 가 없어 odom 이 위치 추정의 전부이므로 치명적이다.
+    # ⚠️ odom 노드에만 적용한다. track_width 는 두 노드에서 뜻이 다르다 —
+    #    bringup 은 물리 track(정기구학), odom 은 슬립 포함 유효 track 이다.
+    #    bringup 쪽 기체별 값은 motor_calib.yaml 이 담당한다(kin_track_width 등).
+    unit_geom_file = os.path.join(pkg_bringup, "config", "unit_geom.yaml")
+    _has_unit_geom = os.path.exists(unit_geom_file)
+    if not _has_unit_geom:
+        print(
+            "\n"
+            "=============================================================\n"
+            "  [tribo] 경고 - config/unit_geom.yaml 이 없다.\n"
+            "  odom 이 기체별 실측값 대신 공칭 기본값으로 동작한다.\n"
+            "  주행 거리와 회전각이 몇 %% 씩 틀어지며, 에러는 뜨지 않는다.\n"
+            "  config/unit_geom.yaml.example 을 복사해 이 기체 값으로 채울 것.\n"
+            "=============================================================\n"
+        )
+
     bringup_node = Node(
         package="tribo_bringup",
         executable="bringup",
@@ -318,7 +342,12 @@ def generate_launch_description():
         # ⚠️ 눈측정 분해능 ~1~3% 인데 보정량이 3.9% 라 여유가 크지 않다.
         #    정밀이 필요하면 turns 6 으로 늘려 상대오차를 절반으로 줄일 것.
         #   재측정: python3 scripts/spin_test.py turns 3
-        "track_width": 1.1845,
+        # ⚠️ 이건 "모델 공칭 기본값"이지 어느 기체의 실측값도 아니다.
+        #    기체별 실측값은 config/unit_geom.yaml 이 덮어쓴다(파일 없으면 런치가 경고).
+        #    실측 예: 7b6a 1.1845 / 76c02a 1.1037 (둘 다 100mm 메카넘, 물리 track 0.74).
+        #    측정법: python3 scripts/spin_test.py turns 3 후
+        #            new = 현재값 x (odom 누적각 / 물리 실제각)
+        "track_width": 1.11,
     }
 
     # odom_publisher → /odom + TF(odom->base_link). 휠 오도메트리 단일 경로.
@@ -328,12 +357,14 @@ def generate_launch_description():
         name="tribo_odom",
         output="screen",
         condition=IfCondition(use_odom),
-        parameters=[
-            geom_file,
-            {**_odom_common_params,
-             "output_topic": "odom",
-             "publish_tf": True},
-        ],
+        # unit_geom.yaml 을 맨 뒤에 둔다 — ROS2 는 나중에 온 파일이 앞을 덮어쓴다.
+        parameters=(
+            [geom_file,
+             {**_odom_common_params,
+              "output_topic": "odom",
+              "publish_tf": True}]
+            + ([unit_geom_file] if _has_unit_geom else [])
+        ),
     )
 
     sllidar_share = get_package_share_directory("sllidar_ros2")
