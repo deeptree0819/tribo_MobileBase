@@ -697,9 +697,30 @@ ros2 launch tribo_navigation map_building.launch.py
 - `laser_filters/scan_to_scan_filter_chain` (`/scan` → `/scan_filtered`)
 - `slam_toolbox` online sync (`config/slam_toolbox_mapping.yaml`)
 
-**③ PC에서 맵 보기** (RViz)
+**③ 맵이 그려지는 과정 보기**
 
-`map_building.launch.py`는 RViz를 띄우지 않으므로, 맵이 그려지는 과정을 보려면 PC에서 뷰어를 따로 실행합니다. (로봇 LCD에는 이 단계에서 RViz가 뜨지 않습니다 — LCD RViz 자동 표시는 Nav2 단계 전용입니다.)
+**로봇 LCD에는 자동으로 뜹니다.** `map_building.launch.py`가 전용 맵 뷰어를 함께 띄웁니다. 맵이 자라면 **배율이 매 프레임 자동으로 맞춰지므로** 실행 중 손댈 것이 없습니다.
+
+| 색 | 의미 |
+|---|---|
+| 흰색 | 빈 공간 |
+| 검정 | 장애물 |
+| 회색 | 미탐색 |
+| 빨강 점 | 로봇 현재 위치 |
+
+좌하단에 현재 표시 범위가 미터로 찍힙니다. 맵이 커지면 이 숫자가 커집니다.
+
+```bash
+# 끄려면
+ros2 launch tribo_navigation map_building.launch.py use_lcd_map:=false
+
+# 맵 뷰어 대신 RViz 를 LCD 에 띄우려면 (라이다 스캔·TF 까지 보고 싶을 때)
+ros2 launch tribo_navigation map_building.launch.py use_rviz:=true use_lcd_map:=false
+```
+
+> RViz 를 쓰지 않는 이유: RViz 의 배율은 설정 파일에 박힌 고정값이라 실행 중 바꾸려면 마우스 휠이 필요한데, 로봇에는 마우스도 키보드도 없습니다. 맵은 매핑 중 계속 자라므로 고정 배율로는 곧 화면을 벗어납니다. 둘을 동시에 켜면 같은 화면을 두고 다투니 하나만 쓰세요.
+
+**PC에서도 보려면** 뷰어를 따로 실행합니다.
 
 ```bash
 # PC — /map, /scan, 로봇 모델을 map_building.rviz 설정으로 표시
@@ -761,6 +782,9 @@ ros2 launch tribo_navigation bringup_launch.xml \
 - `set_initial_pose:=false`로 띄우면 초기 위치를 자동으로 발행하지 않으므로, 다음 단계에서 RViz "2D Pose Estimate"로 직접 찍어줘야 `map`→`odom` TF가 살아납니다.
 - 처음부터 원점에서 시작한다는 게 확실하면 `set_initial_pose:=true`(기본값) + `initial_pose_x/y/yaw`로 자동 발행도 가능합니다.
 - 위 launch는 **로봇에 연결된 LCD에 RViz2를 전체화면으로 자동 표시**합니다(`use_rviz:=true` 기본). RViz가 필요 없으면 `use_rviz:=false`로 끄세요. LCD 표시는 GNOME 데스크톱 세션의 Xwayland(`:0`)에 X 앱을 띄우는 방식이라, **로봇 LCD에 사용자가 한 번 로그인되어 GNOME 세션이 살아있어야** RViz 창이 화면에 뜹니다(자동 로그인이 꺼져 있다면 부팅 후 LCD에서 한 번 로그인 필요).
+- **화면 배율은 맵 크기에 맞춰 자동 조정됩니다.** launch 가 `map` 을 wrapper 에 넘기면 `fit_rviz_to_map.py` 가 맵 yaml 의 해상도와 PGM 픽셀 크기로 실제 범위를 구해 `Scale`·중심을 다시 계산합니다. 맵을 새로 만들어도 손댈 것이 없습니다.
+
+  > `navigation.rviz` 의 고정 배율(89.86)을 그대로 쓰면 맵 일부만 화면에 들어옵니다. 실측에서 20.4×14.65 m 맵에 대해 `Scale` 이 25.13 로 조정됐습니다. 맞춤 생성이 실패해도 원본 설정으로 그냥 뜨므로 Nav2 기동을 막지는 않습니다.
 
 **③ (선택) PC에서도 RViz 따로 보기**
 
@@ -856,6 +880,84 @@ ros2 topic pub -r 20 /cmd_vel geometry_msgs/msg/Twist "{angular: {z: 0.6}}"
 ros2 topic echo /odom --field twist.twist.angular.z   # RViz 가 쓰는 값
 # 새 값 = 현재값 * (실제 각속도 / odom 각속도)
 ```
+
+---
+
+### 7-6. 로봇 LCD 표시 — 명령 모음
+
+로봇 화면에 무엇을 띄울지에 따라 세 가지입니다. **세 개를 동시에 켜면 같은 화면을 두고 다투므로 하나만 쓰세요.**
+
+| 용도 | 명령 | 배율 조정 |
+|------|------|-----------|
+| 카메라 영상 | `launch_camera_on_lcd.sh` | 화면 꽉 채움(고정) |
+| 매핑 중인 맵 | `map_building.launch.py` (자동 포함) | 맵이 자라면 **매 프레임 자동** |
+| Nav2 주행 | `bringup_launch.xml` (자동 포함) | 기동 시 **맵 크기로 자동** |
+
+**카메라 (컬러)**
+
+```bash
+ros2 launch realsense2_camera rs_launch.py
+```
+
+```bash
+~/tribo_ws/src/tribo/tribo_bringup/scripts/launch_camera_on_lcd.sh
+```
+
+**카메라 (depth)** — `enable_depth:=false` 로 띄우면 화면이 검게만 보입니다(5-5-6 참고).
+
+```bash
+~/tribo_ws/src/tribo/tribo_bringup/scripts/launch_camera_on_lcd.sh /camera/camera/depth/image_rect_raw
+```
+
+**매핑** — 별도 명령 없이 함께 뜹니다.
+
+```bash
+ros2 launch tribo_navigation map_building.launch.py
+```
+
+**Nav2** — 별도 명령 없이 함께 뜹니다.
+
+```bash
+ros2 launch tribo_navigation bringup_launch.xml map:=/home/tribo/my_map.yaml set_initial_pose:=false
+```
+
+#### 끄기
+
+LCD 앞이라면 뷰어 위에서 `q` 또는 `ESC`. SSH 라면:
+
+```bash
+pkill -f "lcd_camera_view[.]py"
+```
+
+```bash
+pkill -f "lcd_map_view[.]py"
+```
+
+```bash
+pkill -f "ros2 launch tribo_navigation"
+```
+
+> 대괄호(`[.]`)는 오타가 아닙니다. `pkill -f` 는 **자기 자신의 명령줄도 검사**하므로 패턴이 그대로 들어 있으면 스스로를 죽여 뒤 명령이 실행되지 않습니다.
+>
+> `pkill -f "ros2 launch tribo_navigation"` 은 **다른 사람이 띄운 launch 도 함께 죽입니다.** 같은 기체를 둘이 조작할 때 상대의 실행을 끊어 "맵이 겹친다"처럼 보이는 증상을 만듭니다(실제로 겪음).
+
+#### 화면이 꺼져 있을 때
+
+절전 설정(5-5-6)을 끄기 **전에** 이미 꺼졌다면 설정만으로는 켜지지 않습니다.
+
+```bash
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+```
+
+```bash
+busctl --user call org.gnome.ScreenSaver /org/gnome/ScreenSaver org.gnome.ScreenSaver SetActive b false
+```
+
+#### 공통 전제
+
+- **LCD 에 GNOME 세션이 로그인돼 있어야** 합니다(자동 로그인이면 부팅만으로 충족).
+- **`wmctrl` 이 필요합니다.** 없으면 경고를 찍고 창이 작게 뜹니다 — `sudo apt install -y wmctrl`.
+- `XAUTHORITY` 는 mutter 가 매 부팅마다 임의 접미사로 새로 만들므로 경로를 하드코딩하면 재부팅 후 깨집니다. 스크립트가 글롭으로 최신 파일을 찾습니다.
 
 ---
 
