@@ -1,0 +1,91 @@
+# Gazebo sim 전용 Nav2 파라미터 오버레이
+#
+# tribo_navigation/config/nav2_params.yaml (실로봇과 공유) 위에 덮어씌워진다.
+# 여기에 적은 키만 바뀌고 나머지는 전부 base 를 그대로 물려받는다.
+# 병합은 tribo_gazebo/launch/nav_sim.launch.py 가 런치 시점에 수행한다.
+#
+# 왜 이 파일이 있나
+#   nav2_params.yaml 은 sim 전용 사본이 없어서, sim 을 튜닝하면 실로봇 설정이
+#   그대로 오염된다. 이 오버레이는 tribo_gazebo 안에만 있으므로 여기를 아무리
+#   만져도 실로봇 주행에 영향이 없다.
+#
+# 왜 전체 복사가 아닌가
+#   500 줄을 복사하면 실로봇 쪽 튜닝이 sim 에 반영되지 않고 조용히 어긋난다.
+#   델타만 두면 base 의 개선이 자동으로 따라온다.
+#
+# 쓰는 법
+#   덮어쓸 키를 base 와 같은 계층 구조 그대로 적는다. 예:
+#
+#     controller_server:
+#       ros__parameters:
+#         FollowPath:
+#           lookahead_dist: 0.40
+#
+#   node 이름 -> ros__parameters -> ... 순서를 base 와 정확히 맞출 것.
+#   병합은 딕셔너리 깊이 병합이라 리스트는 통째로 교체된다.
+#
+# ---------------------------------------------------------------------------
+# 2026-08-21  벽 충돌 조사 결과 - 이 오버레이는 원인이 아니었다
+# ---------------------------------------------------------------------------
+# 증상 - Nav2 자율주행 중 로봇이 벽에 부딪힌다.
+#
+# 진짜 원인 - install 사본이 스테일이었다.
+#   tribo_navigation 의 install 은 심링크가 아닌 복사본이었고 2026-07-13 자에
+#   멈춰 있었다. $(find-pkg-share) 는 install 을 가리키므로, 2026-08-19 에
+#   소스에 넣은 사각 footprint(0.50 x 0.78) 수정이 한 번도 적용된 적이 없고
+#   노드는 계속 robot_radius 0.22 로 돌았다. 전폭 0.78 로봇을 반경 0.22 원으로
+#   충돌 검사한 셈이다. RotationShimController 도 통째로 빠져 있었다.
+#   해결은 tribo_navigation 을 --symlink-install 로 clean 재빌드하는 것이었다.
+#
+# 검증 - 재빌드 후 오버레이 없이 base 만으로 목표 5개 연속 주행:
+#   전부 도달, footprint 충돌 0 샘플. 따라서 여기에 costmap 덮어쓰기는 두지 않는다.
+#   sim 이 실로봇과 다른 값으로 돌면 시뮬레이터 의미가 없다.
+#
+# 참고로 남겨두는 마진 이슈 (당장 고칠 문제는 아니다)
+#   NavfnPlanner 는 비용이 INSCRIBED(253) 이상인 셀만 막고, inflation layer 는
+#   inscribed_radius 이내만 253 으로 칠한다. nav2 는 이 값을 footprint 중심에서
+#   각 변까지의 최소 거리로 잡으므로 0.50 x 0.78 에서는 0.25 다(반폭은 0.39).
+#   즉 계획 경로는 벽에서 0.283 m 까지 붙을 수 있다. 실제로 안 부딪히는 이유는
+#   RotationShimController + RPP 의 use_collision_detection 과 Collision Monitor
+#   가 잡아주기 때문이다. 마진을 더 원하면 아래를 켜면 된다(외접원 근사).
+#
+# local_costmap:
+#   local_costmap:
+#     ros__parameters:
+#       footprint: "[]"
+#       robot_radius: 0.463        # hypot(0.25, 0.39)
+#       inflation_layer:
+#         inflation_radius: 0.65
+# global_costmap:
+#   global_costmap:
+#     ros__parameters:
+#       footprint: "[]"
+#       robot_radius: 0.463
+#       inflation_layer:
+#         inflation_radius: 0.65
+
+# ---------------------------------------------------------------------------
+# 튜닝 후보 (측정으로 확정되면 주석을 풀 것)
+# ---------------------------------------------------------------------------
+#
+# 1) 회전 속도 상한
+#    base 의 0.37 rad/s 는 실로봇의 실측 천장이다(rotate_pwm_min 바닥이 만드는
+#    단일 속도). sim 로봇은 그런 물리 제약이 없어 더 빨리 돌 수 있는데도 이
+#    값에 묶여, 넓어진 차체(전폭 0.78)가 코너에서 제때 못 도는 원인이 될 수 있다.
+#
+# controller_server:
+#   ros__parameters:
+#     FollowPath:
+#       rotate_to_heading_angular_vel: 0.8
+#     max_vel_theta: 0.8
+#
+# 2) Pure Pursuit 코너 컷
+#    lookahead_dist 0.60 은 차체가 0.36 x 0.42 이던 시절 값이다. 지금은
+#    0.50 x 0.78 이라 룩어헤드가 반폭(0.39)의 1.5 배밖에 안 되고, RPP 는
+#    원리상 코너를 자르므로 회전 시 안쪽 벽을 스친다.
+#
+# controller_server:
+#   ros__parameters:
+#     FollowPath:
+#       lookahead_dist: 0.40
+#       min_lookahead_dist: 0.20
