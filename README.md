@@ -824,8 +824,8 @@ ros2 topic echo /amcl_pose --once  # 현재 추정 위치
 **구성**
 - **로봇 모델**: 2단 트롤리 외형(하단 구동 베이스 + 모터 4 + 상단 프로파일 프레임 + 선반 플레이트 + LCD). 4륜 차동구동(skid-steer).
 - **센서**: 2D 라이다(`/scan`), Depth 카메라(`/camera/image`, `/camera/depth_image`, `/camera/points`, `/camera/camera_info`)
-- **월드** (`tribo_gazebo/worlds/tribo_world.world`): 8×6 m 실내 — 방 3개 + 복도 + 문 3개 + 장애물 5개(루프 클로저·장애물 회피 연습용). 외부 모델 의존성 없는 self-contained.
-- **odom 보정 완료**: 4륜 스키드 회전 슬립 때문에 `gazebo_control.xacro`의 `wheel_separation`을 물리 트랙(0.50)이 아닌 **유효 트랙 0.65**로 설정. 회전·직진 모두 ±2% 일치 검증함.
+- **월드** (`tribo_gazebo/worlds/tribo_world.world`): 16×12 m 실내 — 방 3개 + 복도 + 문 3개 + 장애물 9개(루프 클로저·장애물 회피 연습용). 외부 모델 의존성 없는 self-contained. 복도·문 폭은 2.0 m — 로봇 전폭이 0.78 m 라 예전 1.0 m 로는 Nav2 가 경로를 못 냈다.
+- **odom 보정 완료**: 4륜 스키드 회전 슬립 때문에 `gazebo_control.xacro`의 `wheel_separation`을 물리 트랙(0.74)이 아닌 **유효 트랙 0.95**로 설정(2026-08-21 재측정). 직진은 오차 0%, 회전은 254° 당 약 3.5° 남는다.
 
 **① 시뮬 실행**
 
@@ -854,6 +854,25 @@ ros2 run nav2_map_server map_saver_cli -f ~/tribo_map
 
 **⑤ Nav2 자율주행** (SLAM 종료 후)
 
+> **⚠️ 그 전에 — `tribo_navigation` 을 빌드했는지 확인할 것.**
+>
+> `$(find-pkg-share tribo_navigation)` 은 **install 사본**을 가리킵니다. 이 패키지의
+> install 이 심링크가 아닌 복사본이면 `config/nav2_params.yaml` 을 아무리 고쳐도
+> 노드에는 안 먹습니다. 실제로 2026-08-21 에 install 사본이 **5주 스테일**이라
+> `robot_radius: 0.22` 로 돌고 있었고(전폭 0.78 m 로봇을 반경 0.22 m 원으로 충돌
+> 검사), `RotationShimController` 도 통째로 빠져 있어 **Nav2 주행 중 벽에 부딪혔습니다.**
+>
+> ```bash
+> rm -rf build/tribo_navigation install/tribo_navigation
+> colcon build --packages-select tribo_navigation --symlink-install
+> ```
+>
+> 뜬 뒤에는 반드시 **라이브 파라미터로 검증**하세요. 파일을 보는 것으로는 부족합니다.
+>
+> ```bash
+> ros2 param get /global_costmap/global_costmap footprint
+> ```
+
 ```bash
 ros2 launch tribo_navigation bringup_launch.xml \
   map:=$HOME/tribo_map.yaml use_sim_time:=true use_rviz:=false
@@ -861,6 +880,20 @@ ros2 launch tribo_navigation bringup_launch.xml \
 # 다른 터미널 — RViz (Nav2 Goal 로 목표 지정)
 ros2 launch tribo_navigation nav2_view.launch.xml
 ```
+
+**⑥ sim 전용 파라미터로 튜닝하고 싶을 때**
+
+`nav2_params.yaml` 은 sim 과 실로봇이 **같이 쓰는 파일**입니다. sim 을 튜닝하면 실주행
+설정이 그대로 바뀝니다. 실로봇을 건드리지 않고 sim 만 조정하려면 오버레이를 쓰세요.
+
+```bash
+ros2 launch tribo_gazebo nav_sim.launch.py map:=$HOME/tribo_map.yaml
+```
+
+`tribo_gazebo/params/nav2_sim_overlay.yaml` 에 적은 키만 base 위에 덮어씌워지고
+나머지는 그대로 물려받습니다(런치 시점 깊이 병합). 병합 결과는
+`/tmp/tribo_nav2_sim_merged.yaml` 에 남으니 열어서 확인할 수 있습니다.
+오버레이는 기본이 비어 있어 base 와 완전히 동일하게 동작합니다.
 
 > **시뮬 주의점**
 > - 시뮬에서는 **항상 `use_sim_time:=true`** (안 주면 TF 시간 불일치로 SLAM/Nav 깨짐).
