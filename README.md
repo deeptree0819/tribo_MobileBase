@@ -1129,3 +1129,9 @@ rot_lin_vx_max: 0.02      # |vx| 가 이 이하일 때만 적용 (제자리 회�
 | Nav2 `get_state service is not available! Aborting bringup` | CPU 거버너를 `performance`로(5-4). Pi5에서 거의 항상 이 원인. RViz는 PC에서(`use_rviz:=false`) |
 | nav/bringup을 Ctrl-C로 껐는데 노드가 안 죽고 남음 | `ros2 launch`는 Ctrl-C 한 번만 처리(이후 무시), sllidar는 종료 느림. 재실행 전 `pkill -9 -f 'ros-args'`로 잔여 노드 정리 (bringup auto-clean은 nav 노드는 안 건드림) |
 | `odom_publisher: No package metadata was found for tribo-odom` | entry point 추가 후 증분 빌드 깨짐. `rm -rf build/tribo_odom install/tribo_odom src/tribo/tribo_odom/tribo_odom.egg-info && colcon build --packages-select tribo_odom --symlink-install` |
+
+---
+
+## 10. 하드웨어 (3D 설계 파일)
+
+Tribo의 3D 설계 파일(1차/최종 설계 파일, STEP, STL)은 [`hardware`](./hardware) 폴더에 있습니다. 자세한 내용은 해당 폴더의 [README](./hardware/README.md)를 참고하세요.
