@@ -17,6 +17,7 @@ Yahboom **Rosmaster STM32 ROS 확장보드** 기반 차동구동(differential dr
 | `tribo_navigation`  | Nav2 / SLAM Toolbox 설정·런치 |
 | `tribo_gazebo`    | Gazebo 시뮬레이션 |
 | `sllidar_ros2`    | RPLIDAR 드라이버 (**git 서브모듈**) |
+| 'hardware'    | Tribo mobile base의 설계 파일 |
 
 데이터 흐름: `bringup`(보드 시리얼) → `encoder_raw` → `odom_publisher`(`/odom`+TF) → `nav2`
 
